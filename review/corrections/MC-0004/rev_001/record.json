@@ -1,0 +1,230 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 17:50:55",
+ "component": {
+  "component_class": "pump",
+  "assembly_id": null,
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-01"
+ },
+ "views": [
+  {
+   "view": "RV-01/v0",
+   "box": [
+    153.8,
+    81.5,
+    226.6,
+    146.4
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.912,
+   "mask_px": 3244,
+   "prompt_hash": "852dfea4c4b493005087",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "e26a7ee981df4c73b97b",
+   "camera": {
+    "name": "RV-01-v0",
+    "C": [
+     2.4,
+     0.15,
+     -2.2
+    ],
+    "R": [
+     [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.996815,
+      0.079745
+     ],
+     [
+      0.0,
+      0.079745,
+      -0.996815
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "bcca50ccc2d934399fb4",
+   "buffers_sha": "168061c622d98a0e069a",
+   "mask_file": "MC-0004/rev_001/mask_RV-01_v0.png",
+   "mask_sha": "e4fdee2a9502bd98f188"
+  },
+  {
+   "view": "RV-01/v1",
+   "box": [
+    214.7,
+    100.1,
+    290.1,
+    158.3
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.903,
+   "mask_px": 2710,
+   "prompt_hash": "09005944c7da6d5cd1d9",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "1000013c54c3ae61ea78",
+   "camera": {
+    "name": "RV-01-v1",
+    "C": [
+     1.4,
+     0.0,
+     -2.5
+    ],
+    "R": [
+     [
+      -0.688749,
+      0.0,
+      -0.724999
+     ],
+     [
+      -0.129299,
+      0.983968,
+      0.122834
+     ],
+     [
+      0.713376,
+      0.178344,
+      -0.677708
+     ]
+    ],
+    "K": [
+     [
+      737.6571367569278,
+      0,
+      383.5
+     ],
+     [
+      0,
+      737.6571367569278,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "cd2136b44e9e10df99b9",
+   "buffers_sha": "48ea96880c658de5cadc",
+   "mask_file": "MC-0004/rev_001/mask_RV-01_v1.png",
+   "mask_sha": "868d2537b40d74203856"
+  }
+ ],
+ "accepted_at": 1794066655.249106,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-two-view",
+ "stats": {
+  "selected": 108,
+  "disputed": 5,
+  "inferred_unseen": 0,
+  "single_view_only": 4,
+  "multi_view_agree": 104,
+  "uncertain_left": 0,
+  "speckle_dropped": 0,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.963,
+  "disagree_frac": 0.044,
+  "evidence_level": "two-view",
+  "bbox": [
+   [
+    2.686,
+    -0.1022,
+    -3.4866
+   ],
+   [
+    2.8053,
+    -0.0052,
+    -3.3238
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [],
+ "splits": [
+  {
+   "group": 262,
+   "object": "OBJ-0262",
+   "label": "control valve",
+   "kind": "object",
+   "support": 0.447,
+   "coverage": 1.0,
+   "spatial": 0.762,
+   "voxels_total": 244,
+   "voxels_moved": 113,
+   "unseen_left_uncertain": 0,
+   "why_not_whole": "spatially inconsistent"
+  }
+ ],
+ "warnings": [
+  "5 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+ ],
+ "per_view": [
+  {
+   "view": "RV-01/v0",
+   "mask_px": 3244,
+   "w_in": 2803.4,
+   "w_gated": 235.3,
+   "gate": 1.261,
+   "voxels_in": 117
+  },
+  {
+   "view": "RV-01/v1",
+   "mask_px": 2710,
+   "w_in": 2309.9,
+   "w_gated": 266.8,
+   "gate": 1.661,
+   "voxels_in": 120
+  }
+ ],
+ "selection_file": "MC-0004/rev_001/selection.npz",
+ "selection_sha": "41a754512c56069af769"
+}

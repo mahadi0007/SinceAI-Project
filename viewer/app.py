@@ -30,6 +30,11 @@ EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4),
 def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
     """Scene graph, walk path, and the inspection tour (out/tour.json) if enabled and present.
     With a tour, the walk follows the tour points instead of the direct path."""
+    from pipeline.correct import downstream_stale
+    for name in ("scene_graph.json", "path.json"):
+        why = downstream_stale(out_path(cfg, name).parent, name)
+        if why:
+            raise SystemExit(f"[viewer] {why}")
     with open(out_path(cfg, "scene_graph.json"), encoding="utf-8") as f:
         sg = json.load(f)
     with open(out_path(cfg, "path.json"), encoding="utf-8") as f:
@@ -222,12 +227,26 @@ class Sim:
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.selected: dict | None = None
-        self.server = viser.ViserServer(port=self.vc["port"])
+        from api.annotate import free_port
+        self.port = free_port(self.vc["port"])          # another viewer may already hold the configured port
+        if self.port != self.vc["port"]:
+            print(f"[viewer] port {self.vc['port']} is in use; using {self.port}")
+        self.server = viser.ViserServer(port=self.port)
         self.server.scene.set_up_direction(self.cfg["scene"]["up_direction"])
         self._labels: list[Any] = []
         self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
+        self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
+        self.h_corr_acc: list[Any] = []
+        self.annot: Any = None
+        try:
+            from api.annotate import start_in_thread
+            self.annot = start_in_thread(cfg, sink=self)
+            self.annot.push_accepted()
+            self.md_correct.content = self.correct_link(self.dd_region.value)
+        except Exception as e:  # noqa: BLE001  (viewer still works without the tool)
+            print(f"[viewer] boundary correction tool unavailable: {e}")
         self.server.scene.on_click()(self.on_scene_click)
 
     # --- splat display groups (ceiling / walls / room) ---
@@ -449,6 +468,16 @@ class Sim:
             self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             self.md_render = g.add_markdown("", visible=False)
             self.img_render = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.md_correct = g.add_markdown(self.correct_link("-"))
+            self.cb_corr = g.add_checkbox("Show correction preview", True)
+            g.add_markdown("<small>Preview: green = selected (2+ views), orange = one view only, red = disputed "
+                           "(excluded), yellow = unseen, left uncertain, blue = unseen, inferred with whole objects. "
+                           "Magenta frames = accepted, cyan = applied.</small>")
+
+        @self.cb_corr.on_update
+        def _(_e: Any) -> None:
+            for h in self.h_corr + self.h_corr_acc:
+                h.visible = self.cb_corr.value
 
         @self.cb_base.on_update
         def _(_e: Any) -> None:
@@ -469,6 +498,7 @@ class Sim:
                 cl.camera.position = tuple(v["eye"])
                 cl.camera.look_at = tuple(v["target"])
             refs = ", ".join(f"{x['id']} {x['cls']}" for x in r["refs"]) or "none (qualitative)"
+            self.md_correct.content = self.correct_link(rid)
             self.md_region.content = f"**{rid}** {r['name']}  \nReferences: {refs}"
             img = ROOT / "out_review" / "compare" / f"{rid}_v0.png"
             if img.exists():
@@ -587,6 +617,56 @@ class Sim:
                                             color=tuple(self.vc["avatar"]["ring_color"]),
                                             opacity=0.15, scale=(r, 0.01, r))
             self.update()
+
+    def correct_link(self, rid: str) -> str:
+        if getattr(self, "annot", None) is None:
+            return "_Boundary correction tool not running yet._"
+        port = self.annot.port
+        q = f"?region={rid}" if rid != "-" else ""
+        return (f"**Correct boundaries:** [open the correction tool](http://localhost:{port}/{q}) "
+                f"(draw a box, include/exclude, SAM mask, second view, accept/undo; manual prompts only).")
+
+    # --- boundary-correction preview sink (called from the annotation server thread) ---
+    def clear_correction(self) -> None:
+        for h in self.h_corr:
+            h.remove()
+        self.h_corr = []
+
+    def show_correction(self, cid: str, layers: dict, colors: dict, bbox: Any, cam: Any) -> None:
+        self.clear_correction()
+        sc = self.server.scene
+        vis = self.cb_corr.value
+        for name, P in layers.items():
+            if len(P):
+                self.h_corr.append(sc.add_point_cloud(f"/correction/{name}", np.asarray(P, np.float32),
+                                                      colors[name], point_size=0.014, visible=vis))
+        if bbox:
+            self.h_corr.append(sc.add_line_segments("/correction/box", box_edges(*bbox), (255, 255, 255),
+                                                    thickness=3.0, thickness_units="screen", visible=vis))
+            self.h_corr.append(sc.add_label("/correction/label", f"{cid} (preview)",
+                                            position=((bbox[0][0] + bbox[1][0]) / 2, bbox[0][1] - 0.05,
+                                                      (bbox[0][2] + bbox[1][2]) / 2), anchor="bottom-center"))
+        if cam is not None and bbox:
+            c = (np.array(bbox[0]) + np.array(bbox[1])) / 2
+            for cl in self.server.get_clients().values():
+                cl.camera.position = tuple(cam.C)
+                cl.camera.look_at = tuple(c)
+
+    def show_accepted(self, items: list[dict]) -> None:
+        for h in self.h_corr_acc:
+            h.remove()
+        self.h_corr_acc = []
+        sc = self.server.scene
+        for it in items:
+            col = (0, 220, 255) if it["status"] == "applied" else (255, 0, 200)
+            bb = it["bbox"]
+            self.h_corr_acc.append(sc.add_line_segments(f"/corrections/{it['cid']}", box_edges(*bb), col,
+                                                        thickness=2.5, thickness_units="screen"))
+            self.h_corr_acc.append(sc.add_label(f"/corrections/{it['cid']}_label",
+                                                f"{it['cid']} {it['cls']} · {it['status']} · {it['evidence']}",
+                                                position=((bb[0][0] + bb[1][0]) / 2, bb[0][1] - 0.05,
+                                                          (bb[0][2] + bb[1][2]) / 2), anchor="bottom-center",
+                                                font_screen_scale=0.7))
 
     @staticmethod
     def review_regions() -> dict:
@@ -779,7 +859,7 @@ class Sim:
 
     def run(self) -> None:
         self.update()
-        print(f"[viewer] http://localhost:{self.vc['port']}  ({len(self.nodes)} objects, "
+        print(f"[viewer] http://localhost:{self.port}  ({len(self.nodes)} objects, "
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
         while True:

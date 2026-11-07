@@ -79,6 +79,18 @@ label:
   workers: 1                # one request at a time (paid; budget in copilot.budget)
   max_batches: 1            # per run; null = all (only after the pilot justifies it)
   vision_sources: [featherless_vision, gemini_vision]   # label_source values that count as VLM evidence
+  manual_sources: [manual_review]       # reviewer-confirmed component CLASS (never asset identity)
+  manual_class_vocab:                   # correction-tool class -> label vocab
+    pump: pump
+    motor: motor
+    control valve: control valve
+    sensor: pressure transmitter/gauge
+    vessel: tank/vessel
+    pipe run: pipe segment
+  manual_label_overrides:               # per component id, reviewer decision (blue electric actuators = control valves)
+    MC-0006: control valve
+    MC-0007: control valve
+    MC-0008: manual valve/handwheel
   min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
   rules_conf: 0.4
   member_dist: 0.03         # full-res splat point -> object if within this of a segmented point
@@ -307,6 +319,20 @@ propose:                    # contextual proposals (pipeline/propose.py)
   min_confidence: 0.5       # VLM confidence to use a candidate for repair
   depth_gate_min: 0.15      # mask pixels deeper than front + max(min, size_factor * size) are background
   depth_gate_size: 1.2
+
+correct:                    # guided manual boundary correction (pipeline/correct.py, api/annotate.py)
+  base_seg: out             # segmentation version being corrected (never modified)
+  out_seg: out_manual       # separate version, written only by the explicit Apply action
+  store: review/corrections # reviewer prompts, masks, revisions, undo history
+  renderer: ewa             # calibrated renders + contribution weights used for 2D->3D support
+  port: 8091                # correction page (embedded in the viewer; standalone: python -m api.annotate)
+  viser_port: 8081          # standalone 3D preview only
+  classes: [unknown, pump, motor, valve, control valve, sensor, vessel, pipe run, other]
+  two_view_min_agree: 0.3   # share of the selection inside the mask in >= 2 views ...
+  max_disagreement: 0.15    # ... and disputed share at most this -> "two-view" evidence
+  guide_max_points: 6000
+  rank_depth_tol: 0.05
+  uncertain_radius: 0.08    # unseen points of touched objects this close to the selection are reported uncertain
 
 tour:                       # inspection tour: door -> warning assets (from Excel status) -> faulty target
   stops: []                 # manual route: tags in visiting order, e.g. [CV-003, M-006]; [] = automatic from Excel

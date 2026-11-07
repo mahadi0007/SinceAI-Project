@@ -173,6 +173,69 @@ def geo_group(base: dict, leaves: dict[int, np.ndarray], gc: Cfg) -> tuple[list[
 
 # ---------- 2. context: proposal + SAM + visibility ----------
 
+def claim_support(pos: np.ndarray, neg: np.ndarray, vox_group: np.ndarray, G: int, protected: np.ndarray,
+                  xyz: np.ndarray, rc: Cfg, describe: Any = None, protected_subset: bool = False) -> dict:
+    """Which voxels ONE candidate (automatic proposal or manual correction) may claim from per-voxel visible
+    support pos/neg. Shared by context_edits and pipeline.correct.
+      whole group  only if visible-in-mask share >= member_frac AND observed coverage >= min_coverage AND
+                   spatial_frac of its voxels lie within spatial_dist of a supported voxel;
+      subset       otherwise only observed voxels with pos > 0 and pos >= neg; unseen voxels stay where they
+                   were and are counted as uncertain (a small visible patch never absorbs a whole cluster).
+    protected groups (long pipe runs, structures) are never claimed whole; with protected_subset=True (manual,
+    reviewer-drawn masks) their supported subset may still be cut out, otherwise they are skipped."""
+    n = len(pos)
+    seen = (pos + neg) > rc["seen_eps"]
+    strength = np.where(seen, pos / np.maximum(pos + neg, 1e-12), 0.0)
+    ok = vox_group >= 0
+    vis_g = np.bincount(vox_group[ok], weights=(pos + neg)[ok], minlength=G)
+    in_g = np.bincount(vox_group[ok], weights=pos[ok], minlength=G)
+    take = np.zeros(n, bool)
+    members, splits, skipped = [], [], []
+    uncertain = 0
+    inferred = np.zeros(n, bool)
+    cand = np.where(in_g >= rc["min_in_px"])[0]
+    order = np.argsort(vox_group, kind="stable")
+    vs = vox_group[order]
+    for gi in cand:
+        lo, hi = np.searchsorted(vs, gi), np.searchsorted(vs, gi, side="right")
+        vg = np.sort(order[lo:hi])
+        frac = in_g[gi] / max(vis_g[gi], 1e-12)
+        extra = describe(int(gi)) if describe else {}
+        if protected[gi] and not protected_subset:
+            skipped.append({"group": int(gi), **extra, "reason": "pipe run protected (no merge/split)",
+                            "support": round(float(frac), 3)})
+            continue
+        sup = vg[seen[vg] & (pos[vg] > 0) & (pos[vg] >= neg[vg])]
+        cov = float(seen[vg].mean())
+        spatial = 0.0
+        if len(sup):
+            dd, _ = cKDTree(xyz[sup]).query(xyz[vg])
+            spatial = float((dd <= rc["spatial_dist"]).mean())
+        ev = {"group": int(gi), **extra, "support": round(float(frac), 3), "coverage": round(cov, 3),
+              "spatial": round(spatial, 3), "voxels_total": int(len(vg))}
+        if (not protected[gi] and frac >= rc["member_frac"] and cov >= rc["min_coverage"]
+                and spatial >= rc["spatial_frac"]):
+            take[vg] = True
+            unseen = vg[~seen[vg]]
+            strength[unseen] = frac                     # inferred voxels carry the group's support
+            inferred[unseen] = True
+            members.append({**ev, "voxels": int(len(vg)), "inferred_unseen": int(len(unseen))})
+            continue
+        if len(sup) < rc["min_split_voxels"]:
+            skipped.append({**ev, "reason": "too few supported voxels", "supported": int(len(sup))})
+            continue
+        take[sup] = True
+        n_unseen = int((~seen[vg]).sum())
+        uncertain += n_unseen
+        splits.append({**ev, "voxels_moved": int(len(sup)), "unseen_left_uncertain": n_unseen,
+                       "why_not_whole": ("protected (pipe run / structure)" if protected[gi] else
+                                         "low coverage" if cov < rc["min_coverage"] else
+                                         "spatially inconsistent" if spatial < rc["spatial_frac"] else
+                                         "low support")})
+    return {"take": take, "strength": strength, "seen": seen, "inferred": inferred, "members": members,
+            "splits": splits, "skipped": skipped, "uncertain": uncertain}
+
+
 def context_edits(base: dict, groups: list[list[int]], leaves: dict[int, np.ndarray], cfg: Cfg,
                   prop_dir: Path, freshness: Any = None) -> tuple[np.ndarray, list[dict], dict[int, dict]]:
     """Returns voxel -> group-or-candidate label, the edit log and candidate metadata.
@@ -221,44 +284,10 @@ def context_edits(base: dict, groups: list[list[int]], leaves: dict[int, np.ndar
                 log.append({"op": "disabled", "family": "context", "candidate": c["cid"], "region": info["region"]})
                 continue
             pos, neg = A[f"pos_{ci}"].astype(np.float64), A[f"neg_{ci}"].astype(np.float64)
-            seen = (pos + neg) > rc["seen_eps"]
-            strength = np.where(seen, pos / np.maximum(pos + neg, 1e-12), 0.0)
-            ok = vox_group >= 0
-            vis_g = np.bincount(vox_group[ok], weights=(pos + neg)[ok], minlength=G)
-            in_g = np.bincount(vox_group[ok], weights=pos[ok], minlength=G)
-            take = np.zeros(n, bool)
-            ev_members, ev_splits, ev_skipped = [], [], []
-            uncertain = 0
-            for gi in np.where(in_g >= rc["min_in_px"])[0]:
-                frac = in_g[gi] / max(vis_g[gi], 1e-12)
-                vg = np.where(vox_group == gi)[0]
-                if is_pipe_group[gi]:
-                    ev_skipped.append({"group": int(gi), "reason": "pipe run protected (no merge/split)",
-                                       "support": round(float(frac), 3)})
-                    continue
-                sup = vg[seen[vg] & (pos[vg] > 0) & (pos[vg] >= neg[vg])]
-                cov = float(seen[vg].mean())
-                spatial = 0.0
-                if len(sup):
-                    dd, _ = cKDTree(xyz[sup]).query(xyz[vg])
-                    spatial = float((dd <= rc["spatial_dist"]).mean())
-                ev = {"group": int(gi), "leaves": groups[gi], "support": round(float(frac), 3),
-                      "coverage": round(cov, 3), "spatial": round(spatial, 3), "voxels_total": int(len(vg))}
-                if frac >= rc["member_frac"] and cov >= rc["min_coverage"] and spatial >= rc["spatial_frac"]:
-                    take[vg] = True
-                    strength[vg[~seen[vg]]] = frac                 # inferred voxels carry the group's support
-                    ev_members.append({**ev, "voxels": int(len(vg))})
-                    continue
-                if len(sup) < rc["min_split_voxels"]:
-                    ev_skipped.append({**ev, "reason": "too few supported voxels", "supported": int(len(sup))})
-                    continue
-                take[sup] = True
-                n_unseen = int((~seen[vg]).sum())
-                uncertain += n_unseen
-                ev_splits.append({**ev, "voxels_moved": int(len(sup)), "unseen_left_uncertain": n_unseen,
-                                  "why_not_whole": ("low coverage" if cov < rc["min_coverage"] else
-                                                    "spatially inconsistent" if spatial < rc["spatial_frac"] else
-                                                    "low support")})
+            cl = claim_support(pos, neg, vox_group, G, is_pipe_group, xyz, rc,
+                               describe=lambda gi: {"leaves": groups[gi]})
+            take, strength = cl["take"], cl["strength"]
+            ev_members, ev_splits, ev_skipped, uncertain = cl["members"], cl["splits"], cl["skipped"], cl["uncertain"]
             idx = np.where(take)[0]
             if len(idx) < rc["min_candidate_voxels"]:
                 continue

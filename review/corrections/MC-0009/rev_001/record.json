@@ -1,0 +1,98 @@
+{
+ "rev": 1,
+ "status": "rejected",
+ "t": "2026-11-07 18:00:18",
+ "component": {
+  "component_class": "vessel",
+  "assembly_id": null,
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-03"
+ },
+ "views": [
+  {
+   "view": "RV-03/v0",
+   "box": [
+    100.0,
+    92.0,
+    388.0,
+    560.0
+   ],
+   "pos": [],
+   "neg": [
+    [
+     112.0,
+     300.0
+    ],
+    [
+     130.0,
+     110.0
+    ]
+   ],
+   "score": 0.983,
+   "mask_px": 116402,
+   "prompt_hash": "59eb3bccd9737d7014d2",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "0f9fec767093c8f9ae9d",
+   "cams_key": "51f35b9c0760add18b5f",
+   "cam_sha": "753fc2c569a8c24bd6a4",
+   "camera": {
+    "name": "RV-03-v0",
+    "C": [
+     0.6,
+     -0.1,
+     0.3
+    ],
+    "R": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.984784,
+      -0.173785
+     ],
+     [
+      0.0,
+      0.173785,
+      0.984784
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "31acc9401deb012a4bfd",
+   "buffers_sha": "1fdb1fe1aedfcb5a9449",
+   "mask_file": "MC-0009/rev_001/mask_RV-03_v0.png",
+   "mask_sha": "bae3f7c7f93abd6ab1ae"
+  }
+ ],
+ "reason": ""
+}
