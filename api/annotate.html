@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boundary Correction</title>
+<style>
+:root {
+  --bg: #f4f4f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #dcdcd6;
+  --accent: #1f6feb; --ok: #1a7f37; --warn: #b26b00; --bad: #c62828; --chip: #ececE6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ececea; --muted: #a0a09a; --line: #34342f;
+    --accent: #4c8dff; --ok: #3fb950; --warn: #e3a008; --bad: #ff6b6b; --chip: #2a2a27;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.pill { padding: 3px 10px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 600; }
+.pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+main { display: grid; grid-template-columns: 300px 1fr; gap: 0; min-height: calc(100vh - 50px); }
+aside { border-right: 1px solid var(--line); background: var(--panel); padding: 12px; overflow-y: auto; }
+section { margin-bottom: 14px; }
+section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+select, input[type=text] { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.good { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+.row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.row > button { flex: 1 1 auto; }
+.modes button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); margin: 4px 0; }
+.work { padding: 12px 16px; overflow: auto; }
+.stage { position: relative; display: inline-block; max-width: 100%; user-select: none; line-height: 0; border: 1px solid var(--line); background: #888; }
+.stage img.base { display: block; max-width: 100%; height: auto; max-height: calc(100vh - 260px); }
+.stage img.layer, .stage canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.stage canvas.prompts { cursor: crosshair; touch-action: none; }
+.stage img.layer { pointer-events: none; }
+.stage canvas.guide { pointer-events: none; }
+#msg { margin: 8px 0; min-height: 20px; font-size: 13px; }
+#msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 8px 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.card b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.card span { font-size: 11px; color: var(--muted); }
+table { border-collapse: collapse; font-size: 12px; width: 100%; background: var(--panel); }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; font-variant-numeric: tabular-nums; }
+ul.warn { margin: 6px 0; padding-left: 18px; color: var(--warn); font-size: 13px; }
+.small { font-size: 12px; color: var(--muted); }
+.views button { margin: 2px 4px 2px 0; }
+kbd { font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Boundary correction</h1>
+  <span id="status" class="pill">loading…</span>
+  <span id="applied" class="small"></span>
+  <span class="small" style="margin-left:auto">Manual prompts only · no paid model calls · base <code id="baseSeg"></code> → <code id="outSeg"></code></span>
+</header>
+<main>
+<aside>
+  <section>
+    <h2>Component</h2>
+    <select id="comp"></select>
+    <div class="row"><button id="newComp">New component</button></div>
+    <label for="cls">Component class (optional)</label>
+    <select id="cls"></select>
+    <label for="asm">Assembly id (optional, e.g. pump + motor)</label>
+    <input id="asm" type="text" placeholder="none">
+    <label for="tag">Workbook asset tag (optional, unverified)</label>
+    <input id="tag" type="text" placeholder="unassigned">
+    <div class="row"><button id="saveMeta">Save details</button></div>
+  </section>
+  <section>
+    <h2>Region and view</h2>
+    <label for="region">Region</label>
+    <select id="region"></select>
+    <label for="view">Calibrated view</label>
+    <select id="view"></select>
+  </section>
+  <section>
+    <h2>Prompts</h2>
+    <div class="row modes">
+      <button data-mode="box" title="B">Draw box</button>
+      <button data-mode="pos" title="I">Include</button>
+      <button data-mode="neg" title="E">Exclude</button>
+    </div>
+    <div class="row">
+      <button id="undoPrompt" title="Ctrl+Z">Undo last prompt</button>
+      <button id="clearPrompts">Clear</button>
+    </div>
+    <div class="row"><button id="previewMask" class="primary">Preview mask</button></div>
+    <label class="check"><input type="checkbox" id="clean"> Clean image (hide mask)</label>
+    <label class="check"><input type="checkbox" id="showGuide" checked> Show 3D selection in this view</label>
+    <div class="row"><button id="dropView">Remove this view from component</button></div>
+  </section>
+  <section>
+    <h2>3D and decision</h2>
+    <div class="row"><button id="preview3d" class="primary">Preview in 3D</button></div>
+    <label class="check"><input type="checkbox" id="prov"> Accept as provisional (single view / unresolved; unseen geometry stays unverified)</label>
+    <div class="row">
+      <button id="accept" class="good">Accept correction</button>
+      <button id="reject" class="danger">Reject</button>
+    </div>
+    <div class="row"><button id="undoAccepted">Undo accepted correction</button></div>
+    <div class="row"><button id="apply">Apply accepted → new segmentation version</button></div>
+  </section>
+  <p class="small"><kbd>B</kbd> box · <kbd>I</kbd> include · <kbd>E</kbd> exclude · <kbd>Ctrl+Z</kbd> undo prompt · <kbd>M</kbd> preview mask</p>
+</aside>
+<div class="work">
+  <div id="msg"></div>
+  <div class="stage" id="stage">
+    <img class="base" id="img" alt="clean Gaussian render">
+    <img class="layer" id="maskLayer" alt="">
+    <canvas class="guide" id="guide"></canvas>
+    <canvas class="prompts" id="cv"></canvas>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:#00a0ff"></i>SAM mask</span>
+    <span><i class="dot" style="background:#28c846"></i>3D selection visible here</span>
+    <span><i class="dot" style="background:#e61e1e"></i>disputed between views</span>
+    <span><i class="dot" style="background:#00c853;border:1px solid #fff"></i>include</span>
+    <span><i class="dot" style="background:#ff1744;border:1px solid #fff"></i>exclude</span>
+  </div>
+  <div id="viewInfo" class="small"></div>
+  <div id="result"></div>
+  <div id="history"></div>
+</div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const S = {
+  views: [], comps: [], classes: [], cid: null, comp: null, view: null, mode: "box",
+  prompts: {},          // key cid|view -> {box, pos, neg, hist: [], version, maskVersion}
+  overlays: {},         // key -> data url of the latest mask for these prompts
+  seq: 0, inflight: {}, preview: null, guide: null,
+};
+const pkey = () => `${S.cid}|${S.view}`;
+function P() {
+  const k = pkey();
+  if (!S.prompts[k]) S.prompts[k] = {box: null, pos: [], neg: [], hist: [], version: 0, maskVersion: -1};
+  return S.prompts[k];
+}
+function msg(t, cls = "") { const m = $("msg"); m.textContent = t; m.className = cls; }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+
+// ---- coordinates: displayed pixels -> ORIGINAL image pixels ----
+function toImage(clientX, clientY) {
+  const img = $("img"), r = img.getBoundingClientRect();
+  const sx = img.naturalWidth / r.width, sy = img.naturalHeight / r.height;
+  const x = (clientX - r.left) * sx, y = (clientY - r.top) * sy;
+  return [Math.min(Math.max(x, 0), img.naturalWidth - 1), Math.min(Math.max(y, 0), img.naturalHeight - 1)];
+}
+window.__toImage = toImage;   // exposed for tests
+
+// ---- drawing ----
+function sizeCanvases() {
+  const img = $("img");
+  for (const c of [$("cv"), $("guide")]) { c.width = img.naturalWidth || 1; c.height = img.naturalHeight || 1; }
+  draw(); drawGuide();
+}
+function draw(drag) {
+  const c = $("cv"), g = c.getContext("2d"), p = P();
+  g.clearRect(0, 0, c.width, c.height);
+  const s = Math.max(1, c.width / 768);
+  const box = drag || p.box;
+  if (box) {
+    g.lineWidth = 2 * s; g.strokeStyle = "#ffd400"; g.setLineDash(drag ? [6 * s, 4 * s] : []);
+    g.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]); g.setLineDash([]);
+  }
+  for (const [pts, col, sym] of [[p.pos, "#00c853", "+"], [p.neg, "#ff1744", "x"]]) {
+    for (const [x, y] of pts) {
+      g.beginPath(); g.arc(x, y, 7 * s, 0, 7); g.fillStyle = col; g.fill();
+      g.lineWidth = 2 * s; g.strokeStyle = "#fff"; g.stroke();
+      g.beginPath(); g.strokeStyle = "#fff";
+      if (sym === "+") { g.moveTo(x - 4 * s, y); g.lineTo(x + 4 * s, y); g.moveTo(x, y - 4 * s); g.lineTo(x, y + 4 * s); }
+      else { g.moveTo(x - 3.5 * s, y - 3.5 * s); g.lineTo(x + 3.5 * s, y + 3.5 * s); g.moveTo(x + 3.5 * s, y - 3.5 * s); g.lineTo(x - 3.5 * s, y + 3.5 * s); }
+      g.stroke();
+    }
+  }
+}
+function drawGuide() {
+  const c = $("guide"), g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  if (!S.guide || S.guide.view !== S.view || !$("showGuide").checked) return;
+  const s = Math.max(1, c.width / 768);
+  for (const [name, col] of [["selected", "rgba(40,200,70,.9)"], ["disputed", "rgba(230,30,30,.95)"]]) {
+    g.fillStyle = col;
+    for (const [x, y] of (S.guide[name] || {}).visible || []) g.fillRect(x - s, y - s, 2 * s, 2 * s);
+  }
+}
+function refreshMaskLayer() {
+  const p = P(), url = S.overlays[pkey()];
+  const show = url && !$("clean").checked;
+  $("maskLayer").style.display = show ? "block" : "none";
+  if (url) $("maskLayer").src = url;
+  $("maskLayer").style.opacity = p.maskVersion === p.version ? "1" : "0.35";   // faded = out of date
+}
+
+// ---- prompt edits ----
+function changed() {
+  const p = P(); p.version++;
+  draw(); refreshMaskLayer(); updateStatus();
+}
+function push(op) { const p = P(); p.hist.push(JSON.stringify({box: p.box, pos: p.pos, neg: p.neg})); op(p); changed(); }
+let dragStart = null;
+$("cv").addEventListener("pointerdown", (e) => {
+  if (!S.cid) { msg("Create or pick a component first.", "err"); return; }
+  const [x, y] = toImage(e.clientX, e.clientY);
+  if (S.mode === "box") { dragStart = [x, y]; $("cv").setPointerCapture(e.pointerId); }
+  else push((p) => p[S.mode].push([+x.toFixed(1), +y.toFixed(1)]));
+});
+$("cv").addEventListener("pointermove", (e) => {
+  if (!dragStart) return;
+  const [x, y] = toImage(e.clientX, e.clientY);
+  draw([Math.min(dragStart[0], x), Math.min(dragStart[1], y), Math.max(dragStart[0], x), Math.max(dragStart[1], y)]);
+});
+$("cv").addEventListener("pointerup", (e) => {
+  if (!dragStart) return;
+  const [x, y] = toImage(e.clientX, e.clientY), a = dragStart; dragStart = null;
+  if (Math.abs(x - a[0]) < 3 || Math.abs(y - a[1]) < 3) { draw(); return; }
+  push((p) => { p.box = [Math.min(a[0], x), Math.min(a[1], y), Math.max(a[0], x), Math.max(a[1], y)].map((v) => +v.toFixed(1)); });
+});
+function setMode(m) { S.mode = m; document.querySelectorAll(".modes button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m)); }
+document.querySelectorAll(".modes button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+$("undoPrompt").onclick = () => { const p = P(); if (!p.hist.length) return; Object.assign(p, JSON.parse(p.hist.pop())); changed(); };
+$("clearPrompts").onclick = () => push((p) => { p.box = null; p.pos = []; p.neg = []; });
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "z" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("undoPrompt").click(); }
+  else if (e.key === "b") setMode("box"); else if (e.key === "i") setMode("pos"); else if (e.key === "e") setMode("neg");
+  else if (e.key === "m") $("previewMask").click();
+});
+$("clean").onchange = refreshMaskLayer;
+$("showGuide").onchange = drawGuide;
+
+// ---- mask (stale responses discarded) ----
+$("previewMask").onclick = async () => {
+  if (!S.cid) return msg("Create or pick a component first.", "err");
+  const p = P(), view = S.view, cid = S.cid, version = p.version, seq = ++S.seq;
+  S.inflight[pkey()] = seq;
+  msg("Running SAM on the clean render…"); updateStatus();
+  try {
+    const r = await api("/api/mask", {cid, view, seq, box: p.box, pos: p.pos, neg: p.neg});
+    const k = `${cid}|${view}`;
+    if (r.stale || S.inflight[k] !== seq || S.prompts[k].version !== version) {
+      msg("Discarded an outdated mask (prompts changed while SAM was running). Press Preview mask again.", "err");
+      return;
+    }
+    delete S.inflight[k];
+    S.overlays[k] = r.overlay; S.prompts[k].maskVersion = version;
+    S.preview = null; S.guide = null; drawGuide(); markResultStale();
+    refreshMaskLayer();
+    msg(`Mask saved as draft: ${r.mask_px.toLocaleString()} px, SAM score ${r.score}.`, "ok");
+    await loadComp(cid, false);
+  } catch (err) { if (S.inflight[pkey()] === seq) delete S.inflight[pkey()]; msg(err.message, "err"); }
+  updateStatus();
+};
+$("dropView").onclick = async () => {
+  if (!S.cid) return;
+  try { await api("/api/drop_view", {cid: S.cid, view: S.view}); delete S.overlays[pkey()]; P().maskVersion = -1;
+        S.preview = null; refreshMaskLayer(); await loadComp(S.cid, false); msg("View removed from the draft.", "ok"); }
+  catch (err) { msg(err.message, "err"); }
+};
+
+// ---- 3D preview / guidance ----
+$("preview3d").onclick = async () => {
+  if (!S.cid) return;
+  msg("Computing contribution-weighted visible support…");
+  try {
+    const r = await api("/api/preview3d", {cid: S.cid});
+    S.preview = r; renderResult(r); await loadGuide();
+    msg("3D preview ready (also shown in the Viser viewer).", "ok");
+    await loadComp(S.cid, false);
+  } catch (err) { msg(err.message, "err"); }
+};
+async function loadGuide() {
+  if (!S.cid) return;
+  try { S.guide = await api(`/api/guide?cid=${encodeURIComponent(S.cid)}&view=${encodeURIComponent(S.view)}`); }
+  catch (err) { S.guide = null; }
+  drawGuide();
+  const g = S.guide;
+  $("viewInfo").textContent = g && g.selected && g.selected.n_visible !== undefined
+    ? `This view: ${g.selected.n_visible} selected voxels visible, ${g.selected.hidden} hidden or out of frame` +
+      (g.disputed && g.disputed.n_visible ? `, ${g.disputed.n_visible} disputed visible` : "") : "";
+}
+function markResultStale() {
+  const h = $("result").querySelector("h3");
+  if (h && !h.dataset.stale) { h.dataset.stale = 1; h.textContent += " (out of date: masks changed, preview again)"; $("result").style.opacity = .5; }
+}
+function card(v, t) { return `<div class="card"><b>${v}</b><span>${t}</span></div>`; }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+function renderResult(r) {
+  const s = r.stats;
+  const lvl = {"two-view": "Two views agree", "single-view-provisional": "Single view (provisional)",
+               "views-disagree": "Views disagree", "two-view-weak-overlap": "Two views, weak overlap"}[s.evidence_level];
+  let h = `<h3 style="margin:12px 0 4px">3D preview: ${esc(lvl)}</h3><div class="cards">` +
+    card(s.selected.toLocaleString(), "voxels selected") + card(s.multi_view_agree.toLocaleString(), "confirmed in 2+ views") +
+    card(s.single_view_only.toLocaleString(), "seen in one view only") + card(s.disputed.toLocaleString(), "disputed (excluded)") +
+    card(s.inferred_unseen.toLocaleString(), "unseen, inferred with whole objects") + card(s.uncertain_left.toLocaleString(), "unseen, left uncertain") + `</div>`;
+  if (r.warnings.length) h += `<ul class="warn">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`;
+  h += `<table><tr><th>object</th><th>label</th><th>taken as</th><th>support</th><th>coverage</th><th>voxels</th></tr>` +
+    r.objects.map((o) => `<tr><td>${esc(o.object)}</td><td>${esc(o.label)}</td><td>${o.mode}</td><td>${o.support}</td><td>${o.coverage}</td><td>${o.mode === "whole" ? o.voxels : o.voxels_moved + " / " + o.voxels_total}</td></tr>`).join("") + `</table>`;
+  h += `<p class="small">Per view: ` + r.per_view.map((v) => `${esc(v.view)}: ${v.empty ? "empty mask" : v.voxels_in + " voxels inside"}`).join(" · ") + `</p>`;
+  if (r.next_views.length)
+    h += `<p class="small">Confirm in another existing view (ranked by visible selected voxels):</p><div class="views">` +
+      r.next_views.map((v) => `<button data-v="${esc(v.key)}">${esc(v.key)} · ${v.visible} visible</button>`).join("") + `</div>`;
+  $("result").innerHTML = h; $("result").style.opacity = 1;
+  $("result").querySelectorAll("button[data-v]").forEach((b) => b.onclick = () => openView(b.dataset.v));
+}
+
+// ---- decisions ----
+$("accept").onclick = async () => {
+  if (!S.cid || !S.preview) return msg("Preview in 3D first.", "err");
+  try {
+    const r = await api("/api/accept", {cid: S.cid, preview_hash: S.preview.preview_hash, accept_provisional: $("prov").checked});
+    S.preview = null; $("result").innerHTML = ""; S.overlays = {}; S.prompts = {}; S.guide = null; drawGuide(); refreshMaskLayer(); draw();
+    msg(`Accepted ${S.cid} revision ${r.rev} (${r.boundary_status}). Saved; press Apply to materialise.`, "ok");
+    await refreshAll();
+  } catch (err) { msg(err.message, "err"); }
+};
+$("reject").onclick = async () => {
+  if (!S.cid) return;
+  try { const r = await api("/api/reject", {cid: S.cid}); S.preview = null; $("result").innerHTML = ""; S.overlays = {}; S.prompts = {};
+        draw(); refreshMaskLayer(); msg(`Draft rejected (kept in history as revision ${r.rev}).`, "ok"); await refreshAll(); }
+  catch (err) { msg(err.message, "err"); }
+};
+$("undoAccepted").onclick = async () => {
+  if (!S.cid) return;
+  if (!confirm(`Undo the active accepted correction of ${S.cid}?`)) return;
+  try { const r = await api("/api/undo", {cid: S.cid});
+        msg(`Undid revision ${r.undone}; active now: ${r.active ?? "original assignment"}` + (r.reapplied ? " (applied version rebuilt)." : "."), "ok");
+        await refreshAll(); }
+  catch (err) { msg(err.message, "err"); }
+};
+$("apply").onclick = async () => {
+  try { const m = await api("/api/apply", {});
+        msg(`Applied ${m.corrections.length} correction(s) → ${m.seg_rev}. Objects ${m.objects.before} → ${m.objects.after}. Downstream artifacts marked stale.`, "ok");
+        await refreshAll(); }
+  catch (err) { msg(err.message, "err"); }
+};
+
+// ---- components / views ----
+async function refreshAll() {
+  const d = await api("/api/components");
+  S.comps = d.components; S.classes = d.classes;
+  $("baseSeg").textContent = d.base_seg; $("outSeg").textContent = d.out_seg;
+  $("cls").innerHTML = S.classes.map((c) => `<option>${c}</option>`).join("");
+  $("comp").innerHTML = `<option value="">— pick a component —</option>` +
+    S.comps.map((c) => `<option value="${c.id}">${c.id} · ${esc(c.component_class)} · ${esc(c.region)} · ${esc(c.state)}</option>`).join("");
+  $("applied").textContent = d.applied ? `Last apply ${d.applied.t} (${d.applied.seg_rev})` + (d.pending_apply.length ? ` · ${d.pending_apply.length} change(s) not applied` : "") + (d.applied_problem ? ` · ${d.applied_problem}` : "") : (d.pending_apply.length ? `${d.pending_apply.length} accepted change(s) not applied` : "nothing applied yet");
+  if (S.cid) { $("comp").value = S.cid; await loadComp(S.cid, false); }
+  updateStatus();
+}
+async function loadComp(cid, moveTo = true) {
+  S.cid = cid || null; S.comp = null;
+  if (!cid) { updateStatus(); return; }
+  const c = await api(`/api/component?cid=${encodeURIComponent(cid)}`);
+  S.comp = c;
+  const opt = [...$("comp").options].find((o) => o.value === cid);
+  if (opt) opt.textContent = `${c.id} · ${c.component_class} · ${c.region} · ${c.status.state}`;
+  $("cls").value = c.component_class; $("asm").value = c.assembly_id || ""; $("tag").value = c.asset.tag || "";
+  for (const [view, v] of Object.entries(c.draft_views)) {        // restore saved drafts (after reload/restart)
+    const k = `${cid}|${view}`;
+    if (!S.prompts[k] || S.prompts[k].maskVersion < 0) {
+      S.prompts[k] = {box: v.box, pos: v.pos, neg: v.neg, hist: [], version: 0, maskVersion: 0};
+      S.overlays[k] = v.overlay;
+    }
+  }
+  if (moveTo) { const first = Object.keys(c.draft_views)[0]; await openView(first || defaultView(c.region)); }
+  renderHistory(c);
+  draw(); refreshMaskLayer(); updateStatus();
+}
+function renderHistory(c) {
+  const st = c.status;
+  let h = `<h3 style="margin:14px 0 4px">${esc(c.id)} history</h3><p class="small">Identity is separate from this boundary: class <b>${esc(c.component_class)}</b> · assembly <b>${esc(c.assembly_id || "none")}</b> · asset <b>${esc(c.asset.tag || "unassigned")}</b> (${esc(c.asset.status)}).</p>`;
+  if (c.revisions.length)
+    h += `<table><tr><th>rev</th><th>status</th><th>evidence</th><th>voxels</th><th>time</th></tr>` +
+      c.revisions.map((r) => `<tr><td>${r.rev}${r.rev === st.accepted_rev ? " ◀ active" : ""}${r.rev === st.applied_rev ? " (applied)" : ""}</td><td>${esc(r.status)}</td><td>${esc(r.evidence_level || "")}</td><td>${r.voxels ?? ""}</td><td>${esc(r.t)}</td></tr>`).join("") + `</table>`;
+  $("history").innerHTML = h;
+}
+function defaultView(region) { const v = S.views.find((x) => x.rid === region); return v ? v.key : S.views[0].key; }
+async function openView(key) {
+  const v = S.views.find((x) => x.key === key); if (!v) return;
+  S.view = key; $("region").value = v.rid; fillViewSelect(v.rid, key);
+  const img = $("img");
+  await new Promise((res) => { img.onload = res; img.onerror = res; img.src = `/api/image?view=${encodeURIComponent(key)}&t=${Date.now()}`; });
+  sizeCanvases(); refreshMaskLayer(); updateStatus();
+  if (v.stale) msg(`Warning: ${v.stale}`, "err");
+  S.guide = null; drawGuide(); $("viewInfo").textContent = "";
+  if (S.cid && ((S.comp && Object.keys(S.comp.draft_views).length) || (S.comp && S.comp.status.accepted_rev))) loadGuide();
+}
+function fillViewSelect(rid, sel) {
+  const own = S.views.filter((v) => v.rid === rid);
+  const others = S.views.filter((v) => v.rid !== rid);
+  $("view").innerHTML = own.map((v) => `<option value="${v.key}">${v.key} (this region)</option>`).join("") +
+    `<optgroup label="Other regions' views">` + others.map((v) => `<option value="${v.key}">${v.key}</option>`).join("") + `</optgroup>`;
+  $("view").value = sel;
+}
+$("region").onchange = () => openView(defaultView($("region").value));
+$("view").onchange = () => openView($("view").value);
+$("comp").onchange = () => { S.preview = null; $("result").innerHTML = ""; loadComp($("comp").value); };
+$("newComp").onclick = async () => {
+  try { const c = await api("/api/component", {region: $("region").value, component_class: $("cls").value || "unknown",
+          assembly_id: $("asm").value || null, asset_tag: $("tag").value || null});
+        S.cid = c.id; await refreshAll(); await loadComp(c.id, false); msg(`Created ${c.id}. Draw a box around the complete equipment.`, "ok"); }
+  catch (err) { msg(err.message, "err"); }
+};
+$("saveMeta").onclick = async () => {
+  if (!S.cid) return;
+  try { await api("/api/component/meta", {cid: S.cid, component_class: $("cls").value, assembly_id: $("asm").value, asset_tag: $("tag").value});
+        msg("Details saved (identity kept separate from the boundary).", "ok"); await refreshAll(); }
+  catch (err) { msg(err.message, "err"); }
+};
+
+// ---- status pill ----
+function updateStatus() {
+  const pill = $("status");
+  if (!S.cid) { pill.textContent = "No component selected"; pill.className = "pill"; return; }
+  const p = P(), st = S.comp ? S.comp.status : null;
+  const busy = S.inflight[pkey()] !== undefined;
+  let t, cls;
+  if (busy) { t = "Running SAM…"; cls = "warn"; }
+  else if ((p.box || p.pos.length || p.neg.length) && p.maskVersion !== p.version) { t = "Pending: prompts changed, mask not previewed"; cls = "warn"; }
+  else if (st && st.draft_views.length && !st.preview_current) { t = "Pending: mask saved as draft, 3D not previewed"; cls = "warn"; }
+  else if (st && st.draft_views.length) { t = "Pending: 3D previewed, not accepted"; cls = "warn"; }
+  else if (st) { t = `Saved: ${st.state}` + (st.accepted_rev ? ` (rev ${st.accepted_rev}, ${st.evidence_level})` : ""); cls = st.state === "applied" ? "ok" : (st.accepted_rev ? "warn" : ""); }
+  else { t = "…"; cls = ""; }
+  pill.textContent = `${S.cid}: ${t}`; pill.className = "pill " + cls;
+  $("accept").disabled = !(S.preview && st && st.preview_current);
+  $("reject").disabled = !(st && st.draft_views.length);
+  $("undoAccepted").disabled = !(st && st.accepted_rev);
+}
+
+// ---- boot ----
+window.addEventListener("resize", () => { draw(); drawGuide(); });
+(async () => {
+  setMode("box");
+  S.views = await api("/api/views");
+  const regs = [...new Set(S.views.map((v) => v.rid))];
+  $("region").innerHTML = regs.map((r) => { const v = S.views.find((x) => x.rid === r); return `<option value="${r}">${r} · ${esc(v.name)}</option>`; }).join("");
+  const q = new URLSearchParams(location.search);
+  await refreshAll();
+  const startRegion = q.get("region") && regs.includes(q.get("region")) ? q.get("region") : regs[0];
+  await openView(q.get("view") || defaultView(startRegion));
+  if (q.get("cid")) { $("comp").value = q.get("cid"); await loadComp(q.get("cid")); }
+  msg("Pick or create a component, then draw a box around the complete equipment.");
+})();
+</script>
+</body>
+</html>

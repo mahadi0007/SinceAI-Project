@@ -1,0 +1,183 @@
+{
+ "rev": 1,
+ "status": "rejected",
+ "t": "2026-11-07 18:02:18",
+ "component": {
+  "component_class": "pump",
+  "assembly_id": "RV04-UNIT-L",
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-04"
+ },
+ "views": [
+  {
+   "view": "RV-04/v0",
+   "box": [
+    280.0,
+    168.0,
+    452.0,
+    285.0
+   ],
+   "pos": [
+    [
+     370.0,
+     235.0
+    ]
+   ],
+   "neg": [
+    [
+     340.0,
+     140.0
+    ]
+   ],
+   "score": 0.874,
+   "mask_px": 10442,
+   "prompt_hash": "a4e180ec7f6e34ba3ac8",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "59f494050c3e851ee638",
+   "camera": {
+    "name": "RV-04-v0",
+    "C": [
+     -2.7,
+     0.1,
+     -2.6
+    ],
+    "R": [
+     [
+      0.822192,
+      -0.0,
+      0.56921
+     ],
+     [
+      0.230428,
+      0.914396,
+      -0.33284
+     ],
+     [
+      -0.520483,
+      0.40482,
+      0.751809
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "1193a8c11709f7cf2409",
+   "buffers_sha": "ecebc97b2d5a827f2800",
+   "mask_file": "MC-0013/rev_001/mask_RV-04_v0.png",
+   "mask_sha": "bf61b1a4903301a6af2b"
+  },
+  {
+   "view": "RV-04/v1",
+   "box": [
+    560.0,
+    195.0,
+    705.0,
+    330.0
+   ],
+   "pos": [
+    [
+     640.0,
+     280.0
+    ]
+   ],
+   "neg": [
+    [
+     500.0,
+     280.0
+    ],
+    [
+     600.0,
+     165.0
+    ]
+   ],
+   "score": 0.848,
+   "mask_px": 8560,
+   "prompt_hash": "cabd7324a76145edf15d",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "673b7c2513554af21c34",
+   "camera": {
+    "name": "RV-04-v1",
+    "C": [
+     -2.7,
+     -0.4,
+     -1.0
+    ],
+    "R": [
+     [
+      -0.5547,
+      0.0,
+      0.83205
+     ],
+     [
+      0.639602,
+      0.639602,
+      0.426401
+     ],
+     [
+      -0.532181,
+      0.768706,
+      -0.354787
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "93dce5c90916c31e702b",
+   "buffers_sha": "0162303aaa94615b9f13",
+   "mask_file": "MC-0013/rev_001/mask_RV-04_v1.png",
+   "mask_sha": "39a48b770bf3cb16c702"
+  }
+ ],
+ "reason": ""
+}

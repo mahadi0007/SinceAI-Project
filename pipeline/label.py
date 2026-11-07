@@ -254,6 +254,28 @@ def decide(a: dict, g: dict | None, lc: Cfg) -> dict:
     return out
 
 
+def manual_decision(a: dict, lc: Cfg) -> dict | None:
+    """Return a confident reviewer class label when the correction metadata resolves to the vocab."""
+    manual = a.get("manual")
+    if not manual or a.get("label_source") not in lc.get("manual_sources", []):
+        return None
+    cid = manual.get("component_id", a["id"])
+    cls = manual.get("component_class")
+    label = lc.get("manual_label_overrides", {}).get(cid) or lc.get("manual_class_vocab", {}).get(cls)
+    if label not in lc["vocab"]:
+        return None
+    return {"label": label, "label_confidence": 1.0, "label_source": "manual_review",
+            "label_reason": (f"reviewer boundary correction {cid} rev {manual.get('revision')} "
+                             f"({manual.get('evidence_level')})")}
+
+
+def vlm_todo(assets: list[dict], key: dict[str, str], cache: dict,
+             only_ids: set[str] | None = None) -> list[dict]:
+    """Uncached non-manual objects eligible for a paid vision request."""
+    return [a for a in assets if a["kind"] == "object" and not a.get("manual")
+            and key[a["id"]] not in cache and (only_ids is None or a["id"] in only_ids)]
+
+
 # ---------- contact sheet ----------
 
 def contact_sheet(assets: list[dict], crops: dict[str, Image.Image], path, lc: Cfg) -> None:
@@ -296,8 +318,7 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
     cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.exists() else {}
     pngs = {k: png_bytes(im.resize((lc["send_px"] * 3, lc["send_px"]))) for k, im in crops.items()}
     key = {a["id"]: cache_key(a, pngs[a["id"]], cfg) for a in assets if a["kind"] == "object"}
-    todo = [a for a in assets if a["kind"] == "object" and key[a["id"]] not in cache
-            and (only_ids is None or a["id"] in only_ids)]
+    todo = vlm_todo(assets, key, cache, only_ids)
     # most informative first (equipment/valves/unnamed, then big pipes) so a budget cut-off hurts least
     todo.sort(key=lambda a: (a["hint"] == "pipe segment", -a["n_points"]))
     if not rules_only and todo:
@@ -326,6 +347,12 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
               f"({len(todo)} uncached in total)")
 
     for a in assets:
+        if a.get("manual"):
+            a["label_manual_class"] = a["manual"].get("component_class")
+        manual = manual_decision(a, lc)
+        if manual:
+            a.update(manual)
+            continue
         # per-object VLM label from the label cache; else the validated contextual proposal (repair stage)
         g = cache.get(key.get(a["id"], "")) or a.get("vlm_proposal")
         a.update(decide(a, g, lc))
@@ -337,7 +364,9 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
     for a in objs:
         hist[a["label"]] = hist.get(a["label"], 0) + 1
     n_vlm = sum(a["label_source"] in lc["vision_sources"] for a in objs)
-    print(f"[labels] {n_vlm}/{len(objs)} from vision LLM (conf >= {lc['min_conf']}), rest geometry rules")
+    n_manual = sum(a["label_source"] in lc.get("manual_sources", []) for a in objs)
+    print(f"[labels] {n_vlm}/{len(objs)} from vision LLM (conf >= {lc['min_conf']}), "
+          f"{n_manual} from manual review, rest geometry rules")
     print("[labels] " + ", ".join(f"{k}: {v}" for k, v in sorted(hist.items(), key=lambda kv: -kv[1])))
     contact_sheet(assets, crops, out_path(cfg, "label_contact_sheet.png"), lc)
     return assets

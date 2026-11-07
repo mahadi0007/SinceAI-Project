@@ -1,0 +1,3434 @@
+{
+ "next": 15,
+ "components": {
+  "MC-0001": {
+   "id": "MC-0001",
+   "created": "2026-11-07 17:22:29",
+   "region": "RV-01",
+   "component_class": "unknown",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "undone",
+     "t": "2026-11-07 17:27:55",
+     "component": {
+      "component_class": "unknown",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        439.7,
+        29.9,
+        585.3,
+        200.7
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.897,
+       "mask_px": 12491,
+       "prompt_hash": "505b923920eadc6004f2",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0001/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "6859e1c297731a3aed2f"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        324.5,
+        12.7,
+        570.7,
+        205.9
+       ],
+       "pos": [
+        [
+         443.7,
+         158.3
+        ]
+       ],
+       "neg": [
+        [
+         464.8,
+         241.7
+        ],
+        [
+         542.9,
+         85.5
+        ],
+        [
+         463.5,
+         25.9
+        ]
+       ],
+       "score": 0.877,
+       "mask_px": 17284,
+       "prompt_hash": "1b7d29fd44c74bf94168",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0001/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "ccd165e34bb9e3872857"
+      }
+     ],
+     "accepted_at": 1794065275.098946,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 400,
+      "disputed": 42,
+      "inferred_unseen": 0,
+      "single_view_only": 16,
+      "multi_view_agree": 384,
+      "uncertain_left": 2,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.96,
+      "disagree_frac": 0.095,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.0871,
+        -0.167,
+        -3.5162
+       ],
+       [
+        2.2819,
+        0.0607,
+        -3.2095
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 12,
+       "object": "OBJ-0012",
+       "label": "wall",
+       "kind": "object",
+       "support": 0.085,
+       "coverage": 0.724,
+       "spatial": 0.067,
+       "voxels_total": 5471,
+       "voxels_moved": 228,
+       "unseen_left_uncertain": 1509,
+       "why_not_whole": "spatially inconsistent"
+      },
+      {
+       "group": 152,
+       "object": "OBJ-0152",
+       "label": "pump",
+       "kind": "object",
+       "support": 0.386,
+       "coverage": 1.0,
+       "spatial": 0.644,
+       "voxels_total": 410,
+       "voxels_moved": 214,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "42 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 12491,
+       "w_in": 11261.8,
+       "w_gated": 549.2,
+       "gate": 1.299,
+       "voxels_in": 494
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 17284,
+       "w_in": 16127.1,
+       "w_gated": 224.5,
+       "gate": 1.349,
+       "voxels_in": 472
+      }
+     ],
+     "selection_file": "MC-0001/rev_001/selection.npz",
+     "selection_sha": "ca76f095e5556a3e954f",
+     "undone_at": "2026-11-07 17:28:36"
+    }
+   ],
+   "accepted_stack": []
+  },
+  "MC-0002": {
+   "id": "MC-0002",
+   "created": "2026-11-07 17:29:23",
+   "region": "RV-01",
+   "component_class": "pump",
+   "assembly_id": "RV01-PUMPB",
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "undone",
+     "t": "2026-11-07 17:29:35",
+     "component": {
+      "component_class": "pump",
+      "assembly_id": "RV01-PUMPB",
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        439.7,
+        29.9,
+        585.3,
+        200.7
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.897,
+       "mask_px": 12491,
+       "prompt_hash": "505b923920eadc6004f2",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0002/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "6859e1c297731a3aed2f"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        324.5,
+        12.7,
+        570.7,
+        205.9
+       ],
+       "pos": [
+        [
+         443.7,
+         158.3
+        ]
+       ],
+       "neg": [
+        [
+         464.8,
+         241.7
+        ],
+        [
+         542.9,
+         85.5
+        ],
+        [
+         463.5,
+         25.9
+        ]
+       ],
+       "score": 0.877,
+       "mask_px": 17284,
+       "prompt_hash": "1b7d29fd44c74bf94168",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0002/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "ccd165e34bb9e3872857"
+      }
+     ],
+     "accepted_at": 1794065375.0373273,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 400,
+      "disputed": 42,
+      "inferred_unseen": 0,
+      "single_view_only": 16,
+      "multi_view_agree": 384,
+      "uncertain_left": 2,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.96,
+      "disagree_frac": 0.095,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.0871,
+        -0.167,
+        -3.5162
+       ],
+       [
+        2.2819,
+        0.0607,
+        -3.2095
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 12,
+       "object": "OBJ-0012",
+       "label": "wall",
+       "kind": "object",
+       "support": 0.085,
+       "coverage": 0.724,
+       "spatial": 0.067,
+       "voxels_total": 5471,
+       "voxels_moved": 228,
+       "unseen_left_uncertain": 1509,
+       "why_not_whole": "spatially inconsistent"
+      },
+      {
+       "group": 152,
+       "object": "OBJ-0152",
+       "label": "pump",
+       "kind": "object",
+       "support": 0.386,
+       "coverage": 1.0,
+       "spatial": 0.644,
+       "voxels_total": 410,
+       "voxels_moved": 214,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "42 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 12491,
+       "w_in": 11261.8,
+       "w_gated": 549.2,
+       "gate": 1.299,
+       "voxels_in": 494
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 17284,
+       "w_in": 16127.1,
+       "w_gated": 224.5,
+       "gate": 1.349,
+       "voxels_in": 472
+      }
+     ],
+     "selection_file": "MC-0002/rev_001/selection.npz",
+     "selection_sha": "ca76f095e5556a3e954f",
+     "undone_at": "2026-11-07 17:29:58"
+    }
+   ],
+   "accepted_stack": []
+  },
+  "MC-0003": {
+   "id": "MC-0003",
+   "created": "2026-11-07 17:31:24",
+   "region": "RV-01",
+   "component_class": "unknown",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [],
+   "accepted_stack": []
+  },
+  "MC-0004": {
+   "id": "MC-0004",
+   "created": "2026-11-07 17:47:37",
+   "region": "RV-01",
+   "component_class": "pump",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 17:50:55",
+     "component": {
+      "component_class": "pump",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        153.8,
+        81.5,
+        226.6,
+        146.4
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.912,
+       "mask_px": 3244,
+       "prompt_hash": "852dfea4c4b493005087",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0004/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "e4fdee2a9502bd98f188"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        214.7,
+        100.1,
+        290.1,
+        158.3
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.903,
+       "mask_px": 2710,
+       "prompt_hash": "09005944c7da6d5cd1d9",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0004/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "868d2537b40d74203856"
+      }
+     ],
+     "accepted_at": 1794066655.249106,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 108,
+      "disputed": 5,
+      "inferred_unseen": 0,
+      "single_view_only": 4,
+      "multi_view_agree": 104,
+      "uncertain_left": 0,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.963,
+      "disagree_frac": 0.044,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.686,
+        -0.1022,
+        -3.4866
+       ],
+       [
+        2.8053,
+        -0.0052,
+        -3.3238
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 262,
+       "object": "OBJ-0262",
+       "label": "control valve",
+       "kind": "object",
+       "support": 0.447,
+       "coverage": 1.0,
+       "spatial": 0.762,
+       "voxels_total": 244,
+       "voxels_moved": 113,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "5 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 3244,
+       "w_in": 2803.4,
+       "w_gated": 235.3,
+       "gate": 1.261,
+       "voxels_in": 117
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 2710,
+       "w_in": 2309.9,
+       "w_gated": 266.8,
+       "gate": 1.661,
+       "voxels_in": 120
+      }
+     ],
+     "selection_file": "MC-0004/rev_001/selection.npz",
+     "selection_sha": "41a754512c56069af769"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0005": {
+   "id": "MC-0005",
+   "created": "2026-11-07 17:51:05",
+   "region": "RV-01",
+   "component_class": "pump",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 17:52:41",
+     "component": {
+      "component_class": "pump",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        439.7,
+        29.9,
+        585.3,
+        200.7
+       ],
+       "pos": [],
+       "neg": [
+        [
+         574.7,
+         88.1
+        ]
+       ],
+       "score": 0.876,
+       "mask_px": 11648,
+       "prompt_hash": "99c64038dcb7c6258d5a",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0005/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "544623bb465cfe13c139"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        324.5,
+        12.7,
+        570.7,
+        205.9
+       ],
+       "pos": [
+        [
+         443.7,
+         158.3
+        ],
+        [
+         470.1,
+         184.8
+        ]
+       ],
+       "neg": [
+        [
+         464.8,
+         241.7
+        ],
+        [
+         542.9,
+         85.5
+        ],
+        [
+         463.5,
+         25.9
+        ]
+       ],
+       "score": 0.859,
+       "mask_px": 17504,
+       "prompt_hash": "01304f1572d61aa8b14b",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0005/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "bfcfbe81703d1b10aeec"
+      }
+     ],
+     "accepted_at": 1794066761.7389233,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 389,
+      "disputed": 44,
+      "inferred_unseen": 0,
+      "single_view_only": 15,
+      "multi_view_agree": 374,
+      "uncertain_left": 2,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.961,
+      "disagree_frac": 0.102,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.0825,
+        -0.1629,
+        -3.5162
+       ],
+       [
+        2.2819,
+        0.0711,
+        -3.2095
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 12,
+       "object": "OBJ-0012",
+       "label": "wall",
+       "kind": "object",
+       "support": 0.08,
+       "coverage": 0.724,
+       "spatial": 0.065,
+       "voxels_total": 5471,
+       "voxels_moved": 213,
+       "unseen_left_uncertain": 1509,
+       "why_not_whole": "spatially inconsistent"
+      },
+      {
+       "group": 152,
+       "object": "OBJ-0152",
+       "label": "pump",
+       "kind": "object",
+       "support": 0.399,
+       "coverage": 1.0,
+       "spatial": 0.649,
+       "voxels_total": 410,
+       "voxels_moved": 220,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "44 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 11648,
+       "w_in": 10443.3,
+       "w_gated": 583.7,
+       "gate": 1.289,
+       "voxels_in": 445
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 17504,
+       "w_in": 16299.1,
+       "w_gated": 227.3,
+       "gate": 1.351,
+       "voxels_in": 481
+      }
+     ],
+     "selection_file": "MC-0005/rev_001/selection.npz",
+     "selection_sha": "4014eefd125f4afd5180"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0006": {
+   "id": "MC-0006",
+   "created": "2026-11-07 17:53:09",
+   "region": "RV-01",
+   "component_class": "valve",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 17:54:45",
+     "component": {
+      "component_class": "valve",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        117.3,
+        377.6,
+        214.5,
+        459.6
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.962,
+       "mask_px": 5350,
+       "prompt_hash": "1fded10b282e38b65e2f",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0006/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "de9b4b20ad36bd48efc3"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        175.0,
+        342.7,
+        249.4,
+        401.9
+       ],
+       "pos": [],
+       "neg": [
+        [
+         235.7,
+         391.3
+        ]
+       ],
+       "score": 0.955,
+       "mask_px": 3123,
+       "prompt_hash": "d0b8761bd64aba7e7b4a",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0006/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "7c0d1179bc5535b9d05d"
+      }
+     ],
+     "accepted_at": 1794066885.5635004,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 110,
+      "disputed": 5,
+      "inferred_unseen": 0,
+      "single_view_only": 1,
+      "multi_view_agree": 109,
+      "uncertain_left": 1,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.991,
+      "disagree_frac": 0.043,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.6886,
+        0.4021,
+        -3.3392
+       ],
+       [
+        2.8107,
+        0.4932,
+        -3.2182
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 327,
+       "object": "OBJ-0327",
+       "label": "pipe fitting/flange",
+       "kind": "object",
+       "support": 0.623,
+       "coverage": 0.995,
+       "spatial": 0.654,
+       "voxels_total": 188,
+       "voxels_moved": 96,
+       "unseen_left_uncertain": 1,
+       "why_not_whole": "spatially inconsistent"
+      },
+      {
+       "group": 776,
+       "object": "OBJ-0776",
+       "label": "pressure transmitter/gauge",
+       "kind": "object",
+       "support": 0.461,
+       "coverage": 1.0,
+       "spatial": 0.304,
+       "voxels_total": 69,
+       "voxels_moved": 19,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "protected (pipe run / structure)"
+      }
+     ],
+     "warnings": [
+      "5 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 5350,
+       "w_in": 4935.0,
+       "w_gated": 141.2,
+       "gate": 1.208,
+       "voxels_in": 125
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 3123,
+       "w_in": 2920.0,
+       "w_gated": 70.3,
+       "gate": 1.671,
+       "voxels_in": 110
+      }
+     ],
+     "selection_file": "MC-0006/rev_001/selection.npz",
+     "selection_sha": "cfe10bcb55e92b42e9bb"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0007": {
+   "id": "MC-0007",
+   "created": "2026-11-07 17:54:50",
+   "region": "RV-01",
+   "component_class": "valve",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 17:56:08",
+     "component": {
+      "component_class": "valve",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-01"
+     },
+     "views": [
+      {
+       "view": "RV-01/v0",
+       "box": [
+        472.7,
+        374.6,
+        565.4,
+        459.6
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.954,
+       "mask_px": 5120,
+       "prompt_hash": "f2f229248374636284c6",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "e26a7ee981df4c73b97b",
+       "camera": {
+        "name": "RV-01-v0",
+        "C": [
+         2.4,
+         0.15,
+         -2.2
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.996815,
+          0.079745
+         ],
+         [
+          0.0,
+          0.079745,
+          -0.996815
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "bcca50ccc2d934399fb4",
+       "buffers_sha": "168061c622d98a0e069a",
+       "mask_file": "MC-0007/rev_001/mask_RV-01_v0.png",
+       "mask_sha": "6572f4bbad8e36a76100"
+      },
+      {
+       "view": "RV-01/v1",
+       "box": [
+        342.1,
+        412.6,
+        448.4,
+        494.6
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.949,
+       "mask_px": 6292,
+       "prompt_hash": "8c57ef775bcd3d23e0fc",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "736c5954d9a0f13b1894",
+       "cams_key": "47819e18db780a3f3440",
+       "cam_sha": "1000013c54c3ae61ea78",
+       "camera": {
+        "name": "RV-01-v1",
+        "C": [
+         1.4,
+         0.0,
+         -2.5
+        ],
+        "R": [
+         [
+          -0.688749,
+          0.0,
+          -0.724999
+         ],
+         [
+          -0.129299,
+          0.983968,
+          0.122834
+         ],
+         [
+          0.713376,
+          0.178344,
+          -0.677708
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "cd2136b44e9e10df99b9",
+       "buffers_sha": "48ea96880c658de5cadc",
+       "mask_file": "MC-0007/rev_001/mask_RV-01_v1.png",
+       "mask_sha": "141ef9403412d325a6f6"
+      }
+     ],
+     "accepted_at": 1794066968.7082222,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 119,
+      "disputed": 12,
+      "inferred_unseen": 0,
+      "single_view_only": 2,
+      "multi_view_agree": 117,
+      "uncertain_left": 1,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.983,
+      "disagree_frac": 0.092,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        2.1253,
+        0.3984,
+        -3.3581
+       ],
+       [
+        2.2448,
+        0.4974,
+        -3.1799
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [
+      {
+       "group": 697,
+       "object": "OBJ-0697",
+       "label": "pipe fitting/flange",
+       "kind": "object",
+       "support": 0.966,
+       "coverage": 1.0,
+       "spatial": 1.0,
+       "voxels_total": 77,
+       "voxels": 77,
+       "inferred_unseen": 0
+      }
+     ],
+     "splits": [
+      {
+       "group": 420,
+       "object": "OBJ-0420",
+       "label": "pipe segment",
+       "kind": "object",
+       "support": 0.417,
+       "coverage": 0.993,
+       "spatial": 0.621,
+       "voxels_total": 140,
+       "voxels_moved": 54,
+       "unseen_left_uncertain": 1,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "12 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-01/v0",
+       "mask_px": 5120,
+       "w_in": 4636.2,
+       "w_gated": 209.0,
+       "gate": 1.177,
+       "voxels_in": 134
+      },
+      {
+       "view": "RV-01/v1",
+       "mask_px": 6292,
+       "w_in": 5695.5,
+       "w_gated": 257.5,
+       "gate": 1.252,
+       "voxels_in": 126
+      }
+     ],
+     "selection_file": "MC-0007/rev_001/selection.npz",
+     "selection_sha": "a425df6a8676dd752ea3"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0008": {
+   "id": "MC-0008",
+   "created": "2026-11-07 17:59:24",
+   "region": "RV-02",
+   "component_class": "valve",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 17:59:45",
+     "component": {
+      "component_class": "valve",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-02"
+     },
+     "views": [
+      {
+       "view": "RV-02/v0",
+       "box": [
+        60.0,
+        335.0,
+        255.0,
+        560.0
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.895,
+       "mask_px": 25940,
+       "prompt_hash": "1687972d7864f3811148",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "a117053eb58cef97bf69",
+       "cams_key": "6a3bd671118872282c09",
+       "cam_sha": "f11c2506b8cfb899bf2a",
+       "camera": {
+        "name": "RV-02-v0",
+        "C": [
+         -1.9,
+         0.2,
+         -2.4
+        ],
+        "R": [
+         [
+          -1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.99083,
+          0.135113
+         ],
+         [
+          0.0,
+          0.135113,
+          -0.99083
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "1e9f2f98fef7c5fb46ac",
+       "buffers_sha": "bd3a72136b03e067db1b",
+       "mask_file": "MC-0008/rev_001/mask_RV-02_v0.png",
+       "mask_sha": "b11d7c850a8ac0c4f785"
+      },
+      {
+       "view": "RV-02/v1",
+       "box": [
+        161.0,
+        281.0,
+        495.0,
+        575.0
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.764,
+       "mask_px": 33392,
+       "prompt_hash": "1e573cd863a085ee2c98",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "a117053eb58cef97bf69",
+       "cams_key": "6a3bd671118872282c09",
+       "cam_sha": "da73114a0a7734b868f0",
+       "camera": {
+        "name": "RV-02-v1",
+        "C": [
+         -1.0,
+         0.1,
+         -2.6
+        ],
+        "R": [
+         [
+          -0.747409,
+          0.0,
+          0.664364
+         ],
+         [
+          0.160608,
+          0.970339,
+          0.180684
+         ],
+         [
+          -0.644658,
+          0.241747,
+          -0.725241
+         ]
+        ],
+        "K": [
+         [
+          737.6571367569278,
+          0,
+          383.5
+         ],
+         [
+          0,
+          737.6571367569278,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "179484705f46c78c8d53",
+       "buffers_sha": "e4c96a25247f0c0ee2e5",
+       "mask_file": "MC-0008/rev_001/mask_RV-02_v1.png",
+       "mask_sha": "9684d04a5d1870a257e4"
+      }
+     ],
+     "accepted_at": 1794067185.9018264,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 573,
+      "disputed": 84,
+      "inferred_unseen": 0,
+      "single_view_only": 48,
+      "multi_view_agree": 525,
+      "uncertain_left": 17,
+      "speckle_dropped": 1,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.916,
+      "disagree_frac": 0.128,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        -1.6804,
+        0.4113,
+        -3.5926
+       ],
+       [
+        -1.4861,
+        0.809,
+        -3.1779
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [
+      {
+       "group": 108,
+       "object": "OBJ-0108",
+       "label": "manual valve/handwheel",
+       "kind": "object",
+       "support": 0.927,
+       "coverage": 1.0,
+       "spatial": 1.0,
+       "voxels_total": 590,
+       "voxels": 590,
+       "inferred_unseen": 0
+      },
+      {
+       "group": 1016,
+       "object": "OBJ-1016",
+       "label": "pipe segment",
+       "kind": "object",
+       "support": 0.774,
+       "coverage": 1.0,
+       "spatial": 1.0,
+       "voxels_total": 24,
+       "voxels": 24,
+       "inferred_unseen": 0
+      }
+     ],
+     "splits": [
+      {
+       "group": 24,
+       "object": "OBJ-0024",
+       "label": "pipe segment",
+       "kind": "object",
+       "support": 0.024,
+       "coverage": 0.45,
+       "spatial": 0.04,
+       "voxels_total": 3399,
+       "voxels_moved": 44,
+       "unseen_left_uncertain": 1870,
+       "why_not_whole": "protected (pipe run / structure)"
+      }
+     ],
+     "warnings": [
+      "OBJ-0024: only 45% observed in these views, so only its visible supported part moves; 1870 unseen voxels stay (uncertain)",
+      "84 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-02/v0",
+       "mask_px": 25940,
+       "w_in": 23622.4,
+       "w_gated": 1041.0,
+       "gate": 1.174,
+       "voxels_in": 548
+      },
+      {
+       "view": "RV-02/v1",
+       "mask_px": 33392,
+       "w_in": 30242.7,
+       "w_gated": 911.4,
+       "gate": 1.33,
+       "voxels_in": 671
+      }
+     ],
+     "selection_file": "MC-0008/rev_001/selection.npz",
+     "selection_sha": "b9bab35dd9ffbeb6886f"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0009": {
+   "id": "MC-0009",
+   "created": "2026-11-07 17:59:50",
+   "region": "RV-03",
+   "component_class": "vessel",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "rejected",
+     "t": "2026-11-07 18:00:18",
+     "component": {
+      "component_class": "vessel",
+      "assembly_id": null,
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-03"
+     },
+     "views": [
+      {
+       "view": "RV-03/v0",
+       "box": [
+        100.0,
+        92.0,
+        388.0,
+        560.0
+       ],
+       "pos": [],
+       "neg": [
+        [
+         112.0,
+         300.0
+        ],
+        [
+         130.0,
+         110.0
+        ]
+       ],
+       "score": 0.983,
+       "mask_px": 116402,
+       "prompt_hash": "59eb3bccd9737d7014d2",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "0f9fec767093c8f9ae9d",
+       "cams_key": "51f35b9c0760add18b5f",
+       "cam_sha": "753fc2c569a8c24bd6a4",
+       "camera": {
+        "name": "RV-03-v0",
+        "C": [
+         0.6,
+         -0.1,
+         0.3
+        ],
+        "R": [
+         [
+          1.0,
+          0.0,
+          0.0
+         ],
+         [
+          0.0,
+          0.984784,
+          -0.173785
+         ],
+         [
+          0.0,
+          0.173785,
+          0.984784
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "31acc9401deb012a4bfd",
+       "buffers_sha": "1fdb1fe1aedfcb5a9449",
+       "mask_file": "MC-0009/rev_001/mask_RV-03_v0.png",
+       "mask_sha": "bae3f7c7f93abd6ab1ae"
+      }
+     ],
+     "reason": ""
+    }
+   ],
+   "accepted_stack": []
+  },
+  "MC-0010": {
+   "id": "MC-0010",
+   "created": "2026-11-07 18:00:25",
+   "region": "RV-04",
+   "component_class": "motor",
+   "assembly_id": "RV04-UNIT-R",
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 18:01:07",
+     "component": {
+      "component_class": "motor",
+      "assembly_id": "RV04-UNIT-R",
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-04"
+     },
+     "views": [
+      {
+       "view": "RV-04/v0",
+       "box": [
+        488.0,
+        38.0,
+        608.0,
+        205.0
+       ],
+       "pos": [],
+       "neg": [
+        [
+         545.0,
+         230.0
+        ]
+       ],
+       "score": 0.957,
+       "mask_px": 14548,
+       "prompt_hash": "7bcdf0dc603cce7ae6a2",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "59f494050c3e851ee638",
+       "camera": {
+        "name": "RV-04-v0",
+        "C": [
+         -2.7,
+         0.1,
+         -2.6
+        ],
+        "R": [
+         [
+          0.822192,
+          -0.0,
+          0.56921
+         ],
+         [
+          0.230428,
+          0.914396,
+          -0.33284
+         ],
+         [
+          -0.520483,
+          0.40482,
+          0.751809
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "1193a8c11709f7cf2409",
+       "buffers_sha": "ecebc97b2d5a827f2800",
+       "mask_file": "MC-0010/rev_001/mask_RV-04_v0.png",
+       "mask_sha": "3b887df60bc4c264655e"
+      },
+      {
+       "view": "RV-04/v1",
+       "box": [
+        398.0,
+        198.0,
+        588.0,
+        445.0
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.959,
+       "mask_px": 29711,
+       "prompt_hash": "60d414c400ed79f240c7",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "673b7c2513554af21c34",
+       "camera": {
+        "name": "RV-04-v1",
+        "C": [
+         -2.7,
+         -0.4,
+         -1.0
+        ],
+        "R": [
+         [
+          -0.5547,
+          0.0,
+          0.83205
+         ],
+         [
+          0.639602,
+          0.639602,
+          0.426401
+         ],
+         [
+          -0.532181,
+          0.768706,
+          -0.354787
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "93dce5c90916c31e702b",
+       "buffers_sha": "0162303aaa94615b9f13",
+       "mask_file": "MC-0010/rev_001/mask_RV-04_v1.png",
+       "mask_sha": "3b381155c7f628ce1137"
+      }
+     ],
+     "accepted_at": 1794067267.070566,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-provisional",
+     "stats": {
+      "selected": 478,
+      "disputed": 97,
+      "inferred_unseen": 0,
+      "single_view_only": 18,
+      "multi_view_agree": 460,
+      "uncertain_left": 0,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.962,
+      "disagree_frac": 0.169,
+      "evidence_level": "views-disagree",
+      "bbox": [
+       [
+        -3.352,
+        0.2091,
+        -1.311
+       ],
+       [
+        -3.1571,
+        0.575,
+        -1.1019
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 45,
+       "object": "OBJ-0045",
+       "label": "pump",
+       "kind": "object",
+       "support": 0.517,
+       "coverage": 0.998,
+       "spatial": 0.431,
+       "voxels_total": 1595,
+       "voxels_moved": 575,
+       "unseen_left_uncertain": 3,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "97 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve",
+      "views disagree: resolve in the second view before relying on it"
+     ],
+     "per_view": [
+      {
+       "view": "RV-04/v0",
+       "mask_px": 14548,
+       "w_in": 13583.8,
+       "w_gated": 224.6,
+       "gate": 1.74,
+       "voxels_in": 531
+      },
+      {
+       "view": "RV-04/v1",
+       "mask_px": 29711,
+       "w_in": 27935.2,
+       "w_gated": 490.2,
+       "gate": 1.173,
+       "voxels_in": 557
+      }
+     ],
+     "selection_file": "MC-0010/rev_001/selection.npz",
+     "selection_sha": "e51e06005a403cffa1a7"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0011": {
+   "id": "MC-0011",
+   "created": "2026-11-07 18:01:07",
+   "region": "RV-04",
+   "component_class": "pump",
+   "assembly_id": "RV04-UNIT-R",
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 18:01:34",
+     "component": {
+      "component_class": "pump",
+      "assembly_id": "RV04-UNIT-R",
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-04"
+     },
+     "views": [
+      {
+       "view": "RV-04/v0",
+       "box": [
+        438.0,
+        180.0,
+        640.0,
+        335.0
+       ],
+       "pos": [
+        [
+         560.0,
+         260.0
+        ]
+       ],
+       "neg": [
+        [
+         548.0,
+         120.0
+        ],
+        [
+         455.0,
+         330.0
+        ]
+       ],
+       "score": 0.836,
+       "mask_px": 13977,
+       "prompt_hash": "0e2c9caed25aa4480115",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "59f494050c3e851ee638",
+       "camera": {
+        "name": "RV-04-v0",
+        "C": [
+         -2.7,
+         0.1,
+         -2.6
+        ],
+        "R": [
+         [
+          0.822192,
+          -0.0,
+          0.56921
+         ],
+         [
+          0.230428,
+          0.914396,
+          -0.33284
+         ],
+         [
+          -0.520483,
+          0.40482,
+          0.751809
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "1193a8c11709f7cf2409",
+       "buffers_sha": "ecebc97b2d5a827f2800",
+       "mask_file": "MC-0011/rev_001/mask_RV-04_v0.png",
+       "mask_sha": "bff943782e3e5e4a485d"
+      },
+      {
+       "view": "RV-04/v1",
+       "box": [
+        335.0,
+        392.0,
+        602.0,
+        556.0
+       ],
+       "pos": [
+        [
+         440.0,
+         480.0
+        ]
+       ],
+       "neg": [
+        [
+         470.0,
+         330.0
+        ]
+       ],
+       "score": 0.839,
+       "mask_px": 17628,
+       "prompt_hash": "321e5cf1872f27fe0a7f",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "673b7c2513554af21c34",
+       "camera": {
+        "name": "RV-04-v1",
+        "C": [
+         -2.7,
+         -0.4,
+         -1.0
+        ],
+        "R": [
+         [
+          -0.5547,
+          0.0,
+          0.83205
+         ],
+         [
+          0.639602,
+          0.639602,
+          0.426401
+         ],
+         [
+          -0.532181,
+          0.768706,
+          -0.354787
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "93dce5c90916c31e702b",
+       "buffers_sha": "0162303aaa94615b9f13",
+       "mask_file": "MC-0011/rev_001/mask_RV-04_v1.png",
+       "mask_sha": "f9dd4e5f81134872dffc"
+      }
+     ],
+     "accepted_at": 1794067294.2889054,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-provisional",
+     "stats": {
+      "selected": 390,
+      "disputed": 81,
+      "inferred_unseen": 0,
+      "single_view_only": 17,
+      "multi_view_agree": 373,
+      "uncertain_left": 3,
+      "speckle_dropped": 52,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.956,
+      "disagree_frac": 0.172,
+      "evidence_level": "views-disagree",
+      "bbox": [
+       [
+        -3.3745,
+        0.5872,
+        -1.4137
+       ],
+       [
+        -3.0866,
+        0.839,
+        -0.9722
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 16,
+       "object": "OBJ-0016",
+       "label": "pipe segment",
+       "kind": "object",
+       "support": 0.058,
+       "coverage": 0.499,
+       "spatial": 0.062,
+       "voxels_total": 4674,
+       "voxels_moved": 84,
+       "unseen_left_uncertain": 2344,
+       "why_not_whole": "low coverage"
+      },
+      {
+       "group": 45,
+       "object": "OBJ-0045",
+       "label": "pump",
+       "kind": "object",
+       "support": 0.271,
+       "coverage": 1.0,
+       "spatial": 0.37,
+       "voxels_total": 1595,
+       "voxels_moved": 439,
+       "unseen_left_uncertain": 0,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "OBJ-0016: only 50% observed in these views, so only its visible supported part moves; 2344 unseen voxels stay (uncertain)",
+      "81 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve",
+      "views disagree: resolve in the second view before relying on it"
+     ],
+     "per_view": [
+      {
+       "view": "RV-04/v0",
+       "mask_px": 13977,
+       "w_in": 10691.7,
+       "w_gated": 2378.0,
+       "gate": 1.84,
+       "voxels_in": 778
+      },
+      {
+       "view": "RV-04/v1",
+       "mask_px": 17628,
+       "w_in": 16342.2,
+       "w_gated": 72.1,
+       "gate": 1.575,
+       "voxels_in": 480
+      }
+     ],
+     "selection_file": "MC-0011/rev_001/selection.npz",
+     "selection_sha": "42cf78197ff4b3903252"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0012": {
+   "id": "MC-0012",
+   "created": "2026-11-07 18:01:34",
+   "region": "RV-04",
+   "component_class": "motor",
+   "assembly_id": "RV04-UNIT-L",
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "accepted",
+     "t": "2026-11-07 18:01:58",
+     "component": {
+      "component_class": "motor",
+      "assembly_id": "RV04-UNIT-L",
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-04"
+     },
+     "views": [
+      {
+       "view": "RV-04/v0",
+       "box": [
+        290.0,
+        35.0,
+        390.0,
+        205.0
+       ],
+       "pos": [],
+       "neg": [
+        [
+         340.0,
+         240.0
+        ]
+       ],
+       "score": 0.884,
+       "mask_px": 10632,
+       "prompt_hash": "2155af7a7c377f760401",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "59f494050c3e851ee638",
+       "camera": {
+        "name": "RV-04-v0",
+        "C": [
+         -2.7,
+         0.1,
+         -2.6
+        ],
+        "R": [
+         [
+          0.822192,
+          -0.0,
+          0.56921
+         ],
+         [
+          0.230428,
+          0.914396,
+          -0.33284
+         ],
+         [
+          -0.520483,
+          0.40482,
+          0.751809
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "1193a8c11709f7cf2409",
+       "buffers_sha": "ecebc97b2d5a827f2800",
+       "mask_file": "MC-0012/rev_001/mask_RV-04_v0.png",
+       "mask_sha": "4baed0c560909d218dd1"
+      },
+      {
+       "view": "RV-04/v1",
+       "box": [
+        552.0,
+        18.0,
+        708.0,
+        242.0
+       ],
+       "pos": [],
+       "neg": [],
+       "score": 0.975,
+       "mask_px": 21143,
+       "prompt_hash": "e4780652e9c35d75441e",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "673b7c2513554af21c34",
+       "camera": {
+        "name": "RV-04-v1",
+        "C": [
+         -2.7,
+         -0.4,
+         -1.0
+        ],
+        "R": [
+         [
+          -0.5547,
+          0.0,
+          0.83205
+         ],
+         [
+          0.639602,
+          0.639602,
+          0.426401
+         ],
+         [
+          -0.532181,
+          0.768706,
+          -0.354787
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "93dce5c90916c31e702b",
+       "buffers_sha": "0162303aaa94615b9f13",
+       "mask_file": "MC-0012/rev_001/mask_RV-04_v1.png",
+       "mask_sha": "eafc9a7befd765f1dba4"
+      }
+     ],
+     "accepted_at": 1794067318.057462,
+     "base_seg": "out",
+     "base_seg_rev": "4654498388d2c552",
+     "renderer": "ewa",
+     "sam_model": "facebook/sam2.1-hiera-tiny",
+     "boundary_status": "accepted-two-view",
+     "stats": {
+      "selected": 425,
+      "disputed": 26,
+      "inferred_unseen": 0,
+      "single_view_only": 15,
+      "multi_view_agree": 410,
+      "uncertain_left": 5,
+      "speckle_dropped": 0,
+      "structure_untouched": 0,
+      "views_used": 2,
+      "agree_frac": 0.965,
+      "disagree_frac": 0.058,
+      "evidence_level": "two-view",
+      "bbox": [
+       [
+        -3.9402,
+        0.2134,
+        -1.308
+       ],
+       [
+        -3.7098,
+        0.6442,
+        -1.1074
+       ]
+      ],
+      "overlaps": {}
+     },
+     "members": [],
+     "splits": [
+      {
+       "group": 48,
+       "object": "OBJ-0048",
+       "label": "other",
+       "kind": "object",
+       "support": 0.437,
+       "coverage": 0.993,
+       "spatial": 0.372,
+       "voxels_total": 1389,
+       "voxels_moved": 451,
+       "unseen_left_uncertain": 10,
+       "why_not_whole": "spatially inconsistent"
+      }
+     ],
+     "warnings": [
+      "26 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+     ],
+     "per_view": [
+      {
+       "view": "RV-04/v0",
+       "mask_px": 10632,
+       "w_in": 9779.8,
+       "w_gated": 267.5,
+       "gate": 2.059,
+       "voxels_in": 500
+      },
+      {
+       "view": "RV-04/v1",
+       "mask_px": 21143,
+       "w_in": 19678.8,
+       "w_gated": 300.4,
+       "gate": 1.57,
+       "voxels_in": 456
+      }
+     ],
+     "selection_file": "MC-0012/rev_001/selection.npz",
+     "selection_sha": "73b5cafab7219bf579e7"
+    }
+   ],
+   "accepted_stack": [
+    1
+   ]
+  },
+  "MC-0013": {
+   "id": "MC-0013",
+   "created": "2026-11-07 18:01:58",
+   "region": "RV-04",
+   "component_class": "pump",
+   "assembly_id": "RV04-UNIT-L",
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {},
+    "preview": null
+   },
+   "revisions": [
+    {
+     "rev": 1,
+     "status": "rejected",
+     "t": "2026-11-07 18:02:18",
+     "component": {
+      "component_class": "pump",
+      "assembly_id": "RV04-UNIT-L",
+      "asset": {
+       "tag": null,
+       "status": "unassigned",
+       "note": "workbook identity is separate from this boundary; not verified by it"
+      },
+      "note": "",
+      "region": "RV-04"
+     },
+     "views": [
+      {
+       "view": "RV-04/v0",
+       "box": [
+        280.0,
+        168.0,
+        452.0,
+        285.0
+       ],
+       "pos": [
+        [
+         370.0,
+         235.0
+        ]
+       ],
+       "neg": [
+        [
+         340.0,
+         140.0
+        ]
+       ],
+       "score": 0.874,
+       "mask_px": 10442,
+       "prompt_hash": "a4e180ec7f6e34ba3ac8",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "59f494050c3e851ee638",
+       "camera": {
+        "name": "RV-04-v0",
+        "C": [
+         -2.7,
+         0.1,
+         -2.6
+        ],
+        "R": [
+         [
+          0.822192,
+          -0.0,
+          0.56921
+         ],
+         [
+          0.230428,
+          0.914396,
+          -0.33284
+         ],
+         [
+          -0.520483,
+          0.40482,
+          0.751809
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "1193a8c11709f7cf2409",
+       "buffers_sha": "ecebc97b2d5a827f2800",
+       "mask_file": "MC-0013/rev_001/mask_RV-04_v0.png",
+       "mask_sha": "bf61b1a4903301a6af2b"
+      },
+      {
+       "view": "RV-04/v1",
+       "box": [
+        560.0,
+        195.0,
+        705.0,
+        330.0
+       ],
+       "pos": [
+        [
+         640.0,
+         280.0
+        ]
+       ],
+       "neg": [
+        [
+         500.0,
+         280.0
+        ],
+        [
+         600.0,
+         165.0
+        ]
+       ],
+       "score": 0.848,
+       "mask_px": 8560,
+       "prompt_hash": "cabd7324a76145edf15d",
+       "sam_model": "facebook/sam2.1-hiera-tiny",
+       "orig_size": [
+        768,
+        576
+       ],
+       "render_key": "bd511361323644e48e8d",
+       "cams_key": "8a0996141927757a38e2",
+       "cam_sha": "673b7c2513554af21c34",
+       "camera": {
+        "name": "RV-04-v1",
+        "C": [
+         -2.7,
+         -0.4,
+         -1.0
+        ],
+        "R": [
+         [
+          -0.5547,
+          0.0,
+          0.83205
+         ],
+         [
+          0.639602,
+          0.639602,
+          0.426401
+         ],
+         [
+          -0.532181,
+          0.768706,
+          -0.354787
+         ]
+        ],
+        "K": [
+         [
+          665.1075101064489,
+          0,
+          383.5
+         ],
+         [
+          0,
+          665.1075101064489,
+          287.5
+         ],
+         [
+          0,
+          0,
+          1
+         ]
+        ],
+        "W": 768,
+        "H": 576
+       },
+       "image_sha": "93dce5c90916c31e702b",
+       "buffers_sha": "0162303aaa94615b9f13",
+       "mask_file": "MC-0013/rev_001/mask_RV-04_v1.png",
+       "mask_sha": "39a48b770bf3cb16c702"
+      }
+     ],
+     "reason": ""
+    }
+   ],
+   "accepted_stack": []
+  },
+  "MC-0014": {
+   "id": "MC-0014",
+   "created": "2026-11-07 18:02:55",
+   "region": "RV-08",
+   "component_class": "unknown",
+   "assembly_id": null,
+   "asset": {
+    "tag": null,
+    "status": "unassigned",
+    "note": "workbook identity is separate from this boundary; not verified by it"
+   },
+   "note": "",
+   "draft": {
+    "views": {
+     "RV-08/v0": {
+      "view": "RV-08/v0",
+      "box": [
+       236.0,
+       188.0,
+       488.0,
+       302.0
+      ],
+      "pos": [],
+      "neg": [],
+      "score": 0.901,
+      "mask_px": 12983,
+      "prompt_hash": "017e2905c995f8ee7974",
+      "sam_model": "facebook/sam2.1-hiera-tiny",
+      "orig_size": [
+       768,
+       576
+      ],
+      "render_key": "23703b8eab8a4c18362d",
+      "cams_key": "1e91aa717d8f30ce8f5d",
+      "cam_sha": "d4b5f0fe72a7a7e21529",
+      "camera": {
+       "name": "RV-08-v0",
+       "C": [
+        0.9,
+        0.1,
+        -2.3
+       ],
+       "R": [
+        [
+         -1.0,
+         0.0,
+         0.0
+        ],
+        [
+         0.0,
+         0.988372,
+         0.152057
+        ],
+        [
+         0.0,
+         0.152057,
+         -0.988372
+        ]
+       ],
+       "K": [
+        [
+         665.1075101064489,
+         0,
+         383.5
+        ],
+        [
+         0,
+         665.1075101064489,
+         287.5
+        ],
+        [
+         0,
+         0,
+         1
+        ]
+       ],
+       "W": 768,
+       "H": 576
+      },
+      "image_sha": "958f26e17033272c0299",
+      "buffers_sha": "b7b34512fc8476518c26",
+      "mask_file": "MC-0014/draft/RV-08_v0.png",
+      "mask_sha": "357d7a19b7af3917a8cf"
+     }
+    },
+    "preview": {
+     "hash": "a7fb92a2c7a75a3aa851",
+     "base_seg_rev": "4654498388d2c552",
+     "stats": {
+      "selected": 364,
+      "disputed": 0,
+      "inferred_unseen": 0,
+      "single_view_only": 364,
+      "multi_view_agree": 0,
+      "uncertain_left": 30,
+      "speckle_dropped": 1,
+      "structure_untouched": 0,
+      "views_used": 1,
+      "agree_frac": 0.0,
+      "disagree_frac": 0.0,
+      "evidence_level": "single-view-provisional",
+      "bbox": [
+       [
+        0.7587,
+        0.1098,
+        -3.5655
+       ],
+       [
+        1.1555,
+        0.2931,
+        -3.3451
+       ]
+      ],
+      "overlaps": {}
+     }
+    }
+   },
+   "revisions": [],
+   "accepted_stack": []
+  }
+ },
+ "events": [
+  {
+   "t": "2026-11-07 17:22:29",
+   "op": "create",
+   "cid": "MC-0001",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:27:55",
+   "op": "accept",
+   "cid": "MC-0001",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 400
+  },
+  {
+   "t": "2026-11-07 17:28:11",
+   "op": "apply",
+   "cid": null,
+   "seg_rev": "872390b76f8f1a9f",
+   "corrections": 1
+  },
+  {
+   "t": "2026-11-07 17:28:36",
+   "op": "undo",
+   "cid": "MC-0001",
+   "rev": 1,
+   "now_active": null
+  },
+  {
+   "t": "2026-11-07 17:28:38",
+   "op": "apply",
+   "cid": null,
+   "seg_rev": "4654498388d2c552",
+   "corrections": 0
+  },
+  {
+   "t": "2026-11-07 17:29:23",
+   "op": "create",
+   "cid": "MC-0002",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:29:35",
+   "op": "accept",
+   "cid": "MC-0002",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 400
+  },
+  {
+   "t": "2026-11-07 17:29:37",
+   "op": "apply",
+   "cid": null,
+   "seg_rev": "0a2b03ed291c0928",
+   "corrections": 1
+  },
+  {
+   "t": "2026-11-07 17:29:58",
+   "op": "undo",
+   "cid": "MC-0002",
+   "rev": 1,
+   "now_active": null
+  },
+  {
+   "t": "2026-11-07 17:30:01",
+   "op": "apply",
+   "cid": null,
+   "seg_rev": "4654498388d2c552",
+   "corrections": 0
+  },
+  {
+   "t": "2026-11-07 17:31:24",
+   "op": "create",
+   "cid": "MC-0003",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:47:37",
+   "op": "create",
+   "cid": "MC-0004",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:50:55",
+   "op": "accept",
+   "cid": "MC-0004",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 108
+  },
+  {
+   "t": "2026-11-07 17:51:05",
+   "op": "create",
+   "cid": "MC-0005",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:52:41",
+   "op": "accept",
+   "cid": "MC-0005",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 389
+  },
+  {
+   "t": "2026-11-07 17:53:09",
+   "op": "create",
+   "cid": "MC-0006",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:54:45",
+   "op": "accept",
+   "cid": "MC-0006",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 110
+  },
+  {
+   "t": "2026-11-07 17:54:50",
+   "op": "create",
+   "cid": "MC-0007",
+   "region": "RV-01"
+  },
+  {
+   "t": "2026-11-07 17:56:08",
+   "op": "accept",
+   "cid": "MC-0007",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 119
+  },
+  {
+   "t": "2026-11-07 17:59:24",
+   "op": "create",
+   "cid": "MC-0008",
+   "region": "RV-02"
+  },
+  {
+   "t": "2026-11-07 17:59:45",
+   "op": "accept",
+   "cid": "MC-0008",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 573
+  },
+  {
+   "t": "2026-11-07 17:59:50",
+   "op": "create",
+   "cid": "MC-0009",
+   "region": "RV-03"
+  },
+  {
+   "t": "2026-11-07 18:00:18",
+   "op": "reject",
+   "cid": "MC-0009",
+   "rev": 1
+  },
+  {
+   "t": "2026-11-07 18:00:25",
+   "op": "create",
+   "cid": "MC-0010",
+   "region": "RV-04"
+  },
+  {
+   "t": "2026-11-07 18:01:07",
+   "op": "accept",
+   "cid": "MC-0010",
+   "rev": 1,
+   "evidence": "views-disagree",
+   "voxels": 478
+  },
+  {
+   "t": "2026-11-07 18:01:07",
+   "op": "create",
+   "cid": "MC-0011",
+   "region": "RV-04"
+  },
+  {
+   "t": "2026-11-07 18:01:34",
+   "op": "accept",
+   "cid": "MC-0011",
+   "rev": 1,
+   "evidence": "views-disagree",
+   "voxels": 390
+  },
+  {
+   "t": "2026-11-07 18:01:34",
+   "op": "create",
+   "cid": "MC-0012",
+   "region": "RV-04"
+  },
+  {
+   "t": "2026-11-07 18:01:58",
+   "op": "accept",
+   "cid": "MC-0012",
+   "rev": 1,
+   "evidence": "two-view",
+   "voxels": 425
+  },
+  {
+   "t": "2026-11-07 18:01:58",
+   "op": "create",
+   "cid": "MC-0013",
+   "region": "RV-04"
+  },
+  {
+   "t": "2026-11-07 18:02:18",
+   "op": "reject",
+   "cid": "MC-0013",
+   "rev": 1
+  },
+  {
+   "t": "2026-11-07 18:02:55",
+   "op": "create",
+   "cid": "MC-0014",
+   "region": "RV-08"
+  },
+  {
+   "t": "2026-11-07 18:03:06",
+   "op": "apply",
+   "cid": null,
+   "seg_rev": "df9d5dfa4ce6e8b3",
+   "corrections": 8
+  }
+ ],
+ "applied": {
+  "t": "2026-11-07 18:03:06",
+  "seg_rev": "df9d5dfa4ce6e8b3",
+  "base_seg_rev": "4654498388d2c552",
+  "revisions": {
+   "MC-0004": 1,
+   "MC-0005": 1,
+   "MC-0006": 1,
+   "MC-0007": 1,
+   "MC-0008": 1,
+   "MC-0010": 1,
+   "MC-0011": 1,
+   "MC-0012": 1
+  }
+ }
+}
