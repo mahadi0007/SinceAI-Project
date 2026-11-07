@@ -22,7 +22,7 @@ from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
 from pipeline.bim_provenance import ArtifactMismatch, compare, scene_revision
 from pipeline.common import ROOT, load_config, out_path, repo_path
-from pipeline.load_splat import covariances, load_splat
+from pipeline.load_splat import covariances, load_splat, open_ply, read_rows, sh_rgb
 from viewer.nudge import add_nudge_gui, gizmo_scale, up_vector
 from viewer import scene_edits as se
 from viewer import ui
@@ -303,6 +303,8 @@ class Sim:
         self.h_inspect: list[Any] = []
         self.b_open3d: list[Any] = []                # "Open in 3D" buttons (clicked object, Info)
         self._seg_tree: Any = None                   # labelled segment points, for an object's own Gaussians
+        self._ply: tuple | None = None               # unfiltered scan rows + all their positions ("Open in 3D")
+        self._inspect: dict | None = None            # opened object's SH colour, viewing browser and last eye
         self.node_by_id = {n["id"]: n for n in self.nodes}
         self.obj_index = {o["id"]: k for k, o in enumerate(self.sg["objects"])}
         self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
@@ -1681,27 +1683,37 @@ class Sim:
 
     # --- open in 3D: the object alone on a distant stage; the browser that opened it orbits / zooms around it ---
     def object_splat(self, n: dict) -> dict[str, np.ndarray]:
-        """The object's Gaussians relative to its box centre: an editable object's own piece, else every Gaussian
-        whose nearest segmented point (within label.member_dist + splat_owner.max_size) belongs to it."""
+        """The object's Gaussians in full scan quality, relative to its box centre: no opacity / size filter and
+        each Gaussian's own size added to the reach (as viewer.splat_owner), so faint detail and edges stay.
+        A Gaussian belongs to the object when its nearest segmented point within that reach does."""
         oid = n.get("copy_of", n["id"])
-        if oid in self.movable:
-            m = self.movable[oid]
-            return {"xyz": m["xyz"], "rgb": m["rgb"], "op": m["op"], "cov": m["cov"]}
+        members = self.movable[oid]["members"] if oid in self.movable else [oid]
         if self._seg_tree is None:
             on = self.pick_lab >= 0
             self._seg_tree, self._seg_lab = cKDTree(self.pick_xyz[on]), self.pick_lab[on]
+        if self._ply is None:
+            raw, col = open_ply(str(repo_path(self.cfg["paths"]["ply"])))
+            with np.errstate(all="ignore"):
+                xyz = np.asarray(raw[:, [col["x"], col["y"], col["z"]]], np.float32)
+            self._ply = (raw, col, xyz)
+        raw, col, xyz = self._ply
         src = self.node_by_id[oid]
-        reach = self.cfg["label"]["member_dist"] + self.vc["splat_owner"]["max_size"]
-        x = self.sp["xyz"]
-        cand = np.flatnonzero(np.all((x >= np.array(src["bbox_min"]) - reach)
-                                     & (x <= np.array(src["bbox_max"]) + reach), axis=1))
-        dist, j = self._seg_tree.query(x[cand], distance_upper_bound=reach, workers=-1)
-        own = (dist <= reach) & (self._seg_lab[np.minimum(j, len(self._seg_lab) - 1)] == self.obj_index[oid])
-        rows = cand[own]
-        out = {"xyz": x[rows] - np.array(src["center"]), "rgb": self.sp["rgb"][rows], "op": self.sp["opacity"][rows]}
-        if "cov" in self.sp:
-            out["cov"] = self.sp["cov"][rows]
-        return out
+        lo = np.min([self.node_by_id[m]["bbox_min"] for m in members], 0)
+        hi = np.max([self.node_by_id[m]["bbox_max"] for m in members], 0)
+        oc = self.vc["splat_owner"]
+        base, cap = self.cfg["label"]["member_dist"], oc["max_size"]
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.all((xyz >= lo - base - cap) & (xyz <= hi + base + cap), axis=1))
+        g = read_rows(raw, col, cand)
+        reach = base + np.minimum(g["scales"].max(1), cap)
+        dist, j = self._seg_tree.query(g["xyz"], distance_upper_bound=base + cap, workers=-1)
+        lab = self._seg_lab[np.minimum(j, len(self._seg_lab) - 1)]
+        own = ((dist <= reach) & np.isin(lab, [self.obj_index[m] for m in members])
+               & (g["scales"].max(1) < 0.5 * np.linalg.norm(hi - lo)))      # no background blobs larger than it
+        g = {k: v[own] for k, v in g.items()}
+        return {"xyz": g["xyz"] - np.array(src["center"], np.float32), "rgb": g["rgb"], "op": g["opacity"][:, None],
+                "cov": covariances(g["scales"], g["quats_wxyz"]).astype(np.float32),
+                "f_dc": g["f_dc"], "sh_rest": g["sh_rest"]}
 
     def toggle_3d(self, n: dict | None, client: Any) -> None:
         if self.inspected is not None:
@@ -1730,13 +1742,15 @@ class Sim:
         with client.atomic():
             client.camera.position = tuple(INSPECT_STAGE + dist * view / np.linalg.norm(view))
             client.camera.look_at = tuple(INSPECT_STAGE)                # after position (which shifts look_at)
+        self._inspect = {"client": client.client_id, "g": g, "eye": None, "t": -1.0}
+        self.update_inspect_colors()
         for b in self.b_open3d:
             b.label, b.icon = "Back to the room", "arrow-back-up"
 
     def close_3d(self) -> None:
         for h in reversed(self.h_inspect):
             h.remove()
-        self.h_inspect, self.inspected = [], None
+        self.h_inspect, self.inspected, self._inspect = [], None, None
         clients = self.server.get_clients()
         for cid, (pos, look, fov) in self.inspect_cams.items():
             if cid in clients:
@@ -1746,6 +1760,24 @@ class Sim:
         self.inspect_cams = {}
         for b in self.b_open3d:
             b.label, b.icon = "Open in 3D", "cube"
+
+    def update_inspect_colors(self, now: float = 0.0) -> None:
+        """View-dependent colour of the opened object (the scan's SH; viser renders base colour only), baked for
+        the browser that opened it whenever its eye moved noticeably, at most 10 times a second."""
+        ins = self._inspect
+        client = self.server.get_clients().get(ins["client"]) if ins else None
+        if client is None or now - ins["t"] < 0.1:
+            return
+        eye = np.asarray(client.camera.position, np.float64) - INSPECT_STAGE
+        if ins["eye"] is not None and np.linalg.norm(eye - ins["eye"]) < 0.01 * np.linalg.norm(eye):
+            return
+        ins["eye"], ins["t"] = eye, now
+        g = ins["g"]
+        rgb = sh_rgb(g["f_dc"], g["sh_rest"], g["xyz"] - eye)
+        if self.vc["render_splats"]:
+            self.h_inspect[1].rgbs = rgb
+        else:
+            self.h_inspect[1].colors = (rgb * 255).astype(np.uint8)
 
     # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
     # One rigid transform per instance (frame /movable/<name>) carries its splat piece, BIM mesh, box, label and
@@ -2484,6 +2516,7 @@ class Sim:
                 else:
                     self.rig.idle(now)
                 last_dist = self.dist
+            self.update_inspect_colors(now)
             if self._reset_pending:                                    # a browser (re)connected
                 self._reset_pending = False
                 try:
