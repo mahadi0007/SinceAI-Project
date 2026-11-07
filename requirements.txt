@@ -14,3 +14,4 @@ pytest
 pyyaml
 matplotlib
 python-dotenv
+mcp>=2.3,<3

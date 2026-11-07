@@ -314,3 +314,16 @@ tour:                       # inspection tour: door -> warning assets (from Exce
   max_stops: 5              # keeps the walk a sensible length for the demo
   reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
   pause_s: 2.0              # viewer pause at each stop
+
+chat:                       # viewer chat: quick commands (free) -> Claude Code headless + our MCP server
+  quick_commands: true      # handle "take me to M-006", "show P-005", "start tour", ... locally, instantly
+  claude_path: auto         # auto = `claude` on PATH or the binary bundled with the Claude Code editor extension
+  model: null               # null = your Claude Code default
+  timeout_s: 150
+  system_prompt: >-
+    You are the field-service copilot inside a 3D viewer of an industrial equipment room. Answer in at most
+    8 short lines of markdown. Use the valmet-copilot tools; ground statements in tool results and cite
+    evidence IDs (TEL-, EVT-, WO-, CASE-, DOC-, DQ-). If the user wants to see, find, go to or tour
+    something, call show_in_viewer, walk_in_viewer or tour_in_viewer. Use diagnose with allow_paid=false
+    unless the user explicitly asks for a fresh paid diagnosis. Never recommend autonomous physical action;
+    recommend verification and escalation (site procedures, LOTO, permits apply).
