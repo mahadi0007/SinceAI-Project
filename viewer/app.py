@@ -372,8 +372,10 @@ class Sim:
         if crop:
             keep &= self.sp_inside
         counts = {}
+        self._splat_group_rows = {}
         for g in ("room", "walls", "ceiling"):
             m = keep & (self.sp_group == g) & ~self.sp_movable
+            self._splat_group_rows[g] = np.flatnonzero(m)
             vis = self.h_splat[g].visible if g in self.h_splat else self.vc["display"].get(f"show_{g}", True)
             if self.vc["render_splats"]:
                 h = sc.add_gaussian_splats(f"/splat/{g}", centers=self.sp["xyz"][m], rgbs=self.sp["rgb"][m],
@@ -384,7 +386,48 @@ class Sim:
             h.visible = vis
             self.h_splat[g] = h
             counts[g] = int(m.sum())
+        self._refresh_visit_tint()
         return counts
+
+    def _set_visit_tint(self, node: dict | None) -> None:
+        """Tint the equipment itself; no transparent mesh can occlude the splats."""
+        previous = getattr(self, "_visit_tint_id", None)
+        if previous in getattr(self, "inst", {}):
+            it = self.inst[previous]
+            it["h"].rgbs = self.movable[it["oid"]]["rgb"]
+        self._visit_tint_id = node["id"] if node else None
+        self._refresh_visit_tint()
+
+    def _refresh_visit_tint(self) -> None:
+        if not hasattr(self, "sp"):
+            return
+        oid = getattr(self, "_visit_tint_id", None)
+        n = next((n for n in self.nodes if n["id"] == oid), None)
+        amount = float(np.clip(self.vc.get("visit_tint_strength", .1), 0, 1))
+        target = None
+        if n is not None:
+            color, _ = visit_style(n)
+            pale = (185, 255, 200) if color[1] > color[0] else ((255, 190, 190) if color[0] > color[1] else (215, 220, 225))
+            target = np.array(pale, dtype=np.float32) / 255.0
+            if not hasattr(self, "_splat_object_labels"):
+                distance, nearest = cKDTree(self.pick_xyz).query(self.sp["xyz"])
+                cutoff = float(self.cfg["label"]["member_dist"])
+                self._splat_object_labels = np.where(distance <= cutoff, self.pick_lab[nearest], -1)
+            label = next(i for i, a in enumerate(self.sg["objects"]) if a["id"] == oid)
+        for group, rows in getattr(self, "_splat_group_rows", {}).items():
+            rgb = self.sp["rgb"][rows].copy()
+            if target is not None:
+                selected = self._splat_object_labels[rows] == label
+                rgb[selected] = (1 - amount) * rgb[selected] + amount * target
+            handle = self.h_splat[group]
+            if self.vc["render_splats"]:
+                handle.rgbs = rgb
+            else:
+                handle.colors = (rgb * 255).astype(np.uint8)
+        if target is not None and oid in getattr(self, "inst", {}):
+            it = self.inst[oid]
+            rgb = self.movable[it["oid"]]["rgb"]
+            it["h"].rgbs = (1 - amount) * rgb + amount * target
 
     # --- scene ---
     def _build_scene(self) -> None:
@@ -419,8 +462,9 @@ class Sim:
         self.h_highlight = sc.add_line_segments("/highlight", *edges_for([], self.vc["colors"]),
                                                 thickness=self.vc["highlight_thickness"],
                                                 thickness_units="screen")
-        self.h_stop_box = sc.add_line_segments("/stop/box", *edges_for([], self.vc["colors"]),
-                                               thickness=self.vc["stop_box_thickness"], thickness_units="screen")
+        self.h_stop_box = sc.add_line_segments(
+            "/stop/box", *edges_for([], self.vc["colors"]),
+            thickness=self.vc.get("stop_box_thickness", 6.0), thickness_units="screen")
         self.h_stop_fill: Any = None
         self.h_stop_label: Any = None
         self.h_selected = sc.add_line_segments("/selected", *edges_for([], self.vc["colors"]),
@@ -1192,19 +1236,17 @@ class Sim:
             self.select(n, inst=self._picked_inst)
 
     def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
-        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour.
+        """Highlight selection with thin edges; never cover the equipment with filled box faces.
         segs: the object's current box edges (a moved instance); default = its box in the scan."""
         if segs is None:
             segs, _ = edges_for([n], self.vc["colors"])
         col = np.array(self.vc["selected_color"], np.uint8)
         self.h_selected.points = segs
         self.h_selected.colors = np.tile(col, (len(segs), 2, 1))
-        pts = np.asarray(segs).reshape(-1, 3)
-        lo, hi = pts.min(0), pts.max(0)
-        pad = self.vc["stop_fill_pad"]
-        self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
-            "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
-            opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
+        old_fill = getattr(self, "h_selected_fill", None)
+        if old_fill is not None:
+            old_fill.remove()
+        self.h_selected_fill = None
         self.selection_highlight_id = n["id"]
         self._sync_visit_labels()
 
@@ -1840,19 +1882,16 @@ class Sim:
         self.playing = True
 
     def highlight_stop(self, st: dict) -> None:
-        """Thick coloured frame + translucent fill + big label on the stop's equipment; worker faces it."""
+        """Solid health outline and a pale tint applied directly to the actual equipment."""
         n = next(x for x in self.nodes if x["id"] == st["object_id"])
         self.clear_visit_highlight()
         col, title = visit_style(n)
-        segs, _ = edges_for([n], self.vc["colors"])
+        lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
+        pad = self.vc.get("stop_outline_pad", .01)
+        segs = box_edges(lo - pad, hi + pad)
         self.h_stop_box.points = segs
         self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
         self.h_stop_box.visible = True
-        lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
-        pad = self.vc["stop_fill_pad"]
-        self.h_stop_fill = self.server.scene.add_box(
-            "/stop/fill", tuple(col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
-            opacity=self.vc["stop_fill_opacity"], cast_shadow=False, receive_shadow=False)
         self.h_stop_label = self.server.scene.add_label(
             "/stop/label", title,
             position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
@@ -1860,6 +1899,7 @@ class Sim:
         self.stop_active = st
         self.visit_active = st
         self.visit_arrival_gap = self.box_gap(n, self.position())
+        self._set_visit_tint(n)
         self.h_highlight.visible = False
         self._sync_visit_labels()
         self.face_target = np.array(n["center"], np.float64)
@@ -1872,13 +1912,14 @@ class Sim:
             self.h_stop_fill.visible = self.visit_active is not None
 
     def clear_visit_highlight(self) -> None:
-        self.h_stop_box.points, self.h_stop_box.colors = edges_for([], self.vc["colors"])
+        self.h_stop_box.visible = False
         for h in (self.h_stop_fill, self.h_stop_label):
             if h is not None:
                 h.remove()
         self.h_stop_fill = self.h_stop_label = None
         self.visit_active = None
         self.visit_arrival_gap = 0.0
+        self._set_visit_tint(None)
         self._sync_visit_labels()
 
     def end_stop(self) -> None:
