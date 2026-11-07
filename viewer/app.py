@@ -710,6 +710,13 @@ class Sim:
                                        initial_value=self.equip_opt[self.target["asset"]["tag"]],
                                        hint="Sorted by condition: most urgent first. Picking one shows its "
                                             "information and walks the worker there.")
+        with g.add_folder("Clicked object", visible=False) as self.fo_clicked:   # shown after a click in the scan
+            self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)   # scan views of it
+            self.md_sel = g.add_markdown("")                                              # its data underneath
+            self.b_identify = g.add_button("Ask the AI to know this", color="gray", icon="sparkles",
+                                           hint="Uses 1 paid request from the team's AI budget")
+            self.md_identify = g.add_markdown("")
+            b_close = g.add_button("Close", color="gray", icon="x")
         self.h_hero = g.add_html("")                          # status card of the selected equipment/object
         self.h_audio = g.add_html("", visible=False)          # spoken briefing player
         self.b_ask = g.add_button("Ask the copilot", color="gray", icon="message-chatbot",
@@ -717,7 +724,6 @@ class Sim:
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="teal")
         self.md_copilot = g.add_markdown("")
-        self.img_obj = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)   # scan crop (no-record objects)
         self.md_details: dict[str, Any] = {}
         self.detail_folders: list[Any] = []
         with g.add_folder("Full Excel record", expand_by_default=False) as fo_all:
@@ -734,11 +740,28 @@ class Sim:
         def _(e: Any) -> None:
             self.load_equipment()
             if e.client is not None:                    # picked by a person (tour/walk/click selections have no
+                self.fo_clicked.visible = False
                 self.go_to(self.selected_equipment())   # client): the worker walks there as well
 
         @self.b_ask.on_click
         def _(e: Any) -> None:
             self.open_question_dialog(e.client)
+
+        @b_close.on_click
+        def _(_e: Any) -> None:
+            self.fo_clicked.visible = False
+
+        @self.b_identify.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                return
+            n = self.selected
+            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
+
+            def work() -> None:
+                from pipeline.label import identify_object
+                self.md_identify.content = identify_object(n, self.cfg)
+            threading.Thread(target=work, daemon=True).start()
 
     def _build_walk_tab(self, g: Any) -> None:
         """Three ways to move the worker: pick equipment from the list, pick an object in the 3D scan
@@ -859,24 +882,14 @@ class Sim:
         for fo in self.detail_folders:
             fo.visible = not on
         self.b_ask.visible = not on                            # the copilot answers about Excel equipment only
-        if not on:
-            self.img_obj.visible = False
 
     def show_object(self, n: dict) -> None:
         """All we know about a scene object without an Excel record: label, size, scan points, crop image."""
         self._load_token += 1                                  # cancels a pending equipment load
         self.set_audio(None)
         self.set_object_view(True)
-        self.h_hero.content = ui.object_hero(n, self.cfg["scene"]["units_to_m"])
-        self.md_copilot.content = (selection_text(n, self.cfg["scene"]["units_to_m"])
-                                   + "\n\n_Pick an equipment in the dropdown above to see Excel data._")
-        crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
-        if crop.exists():
-            from PIL import Image
-            self.img_obj.image = np.asarray(Image.open(crop).convert("RGB"))
-            self.img_obj.visible = True
-        else:
-            self.img_obj.visible = False
+        self.h_hero.content = ""                               # the Clicked object card above shows it
+        self.md_copilot.content = "_Not in the Excel pack. Pick an equipment in the dropdown above to see Excel data._"
 
     def excel_sources(self, tag: str) -> list[str]:
         """Provenance of the card's values: Excel sheet + row (row 1 = header) or row counts."""
@@ -1193,11 +1206,6 @@ class Sim:
             sl_dark = g.add_slider("Hide dark splats below", 0.0, 0.2, 0.01, dc["dark_threshold"])
             b_apply = g.add_button("Apply filter", color="gray")
             md_disp = g.add_markdown("")
-        with g.add_folder("Clicked object", expand_by_default=False):
-            self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
-            self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            self.b_identify = g.add_button("Ask the AI to know this", color="gray", hint="Uses 1 paid request from the team's AI budget")
-            self.md_identify = g.add_markdown("")
         with g.add_folder("Boundary repair: before / after", expand_by_default=False):
             g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
                            f"(magenta) · **{self.n_geo}** geometry pipe joins (cyan)  \nBefore: **{self.n_baseline}** "
@@ -1278,17 +1286,6 @@ class Sim:
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
 
-        @self.b_identify.on_click
-        def _(_e: Any) -> None:
-            if self.selected is None:
-                return
-            n = self.selected
-            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
-
-            def work() -> None:
-                from pipeline.label import identify_object
-                self.md_identify.content = identify_object(n, self.cfg)
-            threading.Thread(target=work, daemon=True).start()
 
         @self.cb_corr.on_update
         def _(_e: Any) -> None:
@@ -1570,6 +1567,10 @@ class Sim:
             self.select(n, inst=self._picked_inst)
             if getattr(self, "pick_to_walk", False):
                 self.walk_to_picked(n)
+            else:
+                if not n.get("asset"):
+                    self.show_object(n)                                 # Info below the card: no Excel record
+                self.show_tab("Info")
 
     def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
         """Highlight selection with thin edges; never cover the equipment with filled box faces.
@@ -1626,6 +1627,7 @@ class Sim:
         else:
             self.img_sel.visible = False
         self.md_identify.content = ""
+        self.fo_clicked.visible = True
         what = (f"<b>{ui.esc(n['asset']['tag'])}</b> · {ui.esc(n['label'])}" if n["asset"] else
                 f"<b>{ui.esc(n['id'])}</b> · {ui.esc(n['label'])} <em>(no Excel record)</em>")
         self.h_clicked.content = ui.selected_chip(what)
