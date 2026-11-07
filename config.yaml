@@ -229,6 +229,14 @@ viewer:
     max_checks: 3                      # next safe checks read aloud
     safety_line: "Site procedures, lockout-tagout and permits apply."
     arrive_gap: 0.6                    # worker counts as "in front of" the target within this box gap (units)
+  pov:                      # "Worker view (POV)": camera at the worker's eyes (height = avatar head_h)
+    fov_deg: 75             # human-like field of view
+    eye_forward: 0.12       # eye sits this far in front of the head centre (units), so the head doesn't block it
+    look_ahead: 2.0         # while walking, look at a point this far ahead ...
+    look_down: 0.35         # ... and this much lower (units): eyes on the floor ahead, like a person walking
+    smoothing: 0.2          # 0..1 per frame (20 fps): lower = slower, smoother head turns
+    max_look_down_deg: 20   # at a stop the head turns to the equipment but tilts at most this far down ...
+    max_look_up_deg: 25     # ... or up (box centres of floor pumps / overhead valves are near floor / ceiling)
 
 evidence:
   samples_per_day: 48           # 30-min telemetry
