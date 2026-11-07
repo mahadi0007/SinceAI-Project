@@ -114,9 +114,11 @@ def selection_text(n: dict, u2m: float) -> str:
     rp = n.get("repair")
     if rp:
         if rp.get("family") == "context":
-            md += ["", f"**Repaired boundary** (context): {rp.get('region')}/{rp.get('cid')} proposed as "
-                       f"_{rp.get('cls')}_ ({rp.get('confidence')}) by {rp.get('model')}, refined by SAM 2.1 masks + "
-                       f"visible 3D support. Unverified; revert via `repair.context.disabled`."]
+            md += ["", f"**Repaired boundary** (context, {rp.get('boundary_status', 'unreviewed')}): "
+                       f"{rp.get('region')}/{rp.get('cid')} proposed as _{rp.get('cls')}_ ({rp.get('confidence')}) by "
+                       f"{rp.get('model')} on {rp.get('renderer')} renders, refined by SAM 2.1 masks + weighted visible "
+                       f"3D support. Boundary, class and asset identity are separate, all unverified; revert via "
+                       f"`repair.context.disabled`."]
         else:
             md += ["", f"**Repaired boundary** (geometry): {len(rp.get('leaves', []))} pipe pieces joined by "
                        f"centreline/thickness/gap checks."]
@@ -306,6 +308,8 @@ class Sim:
             self.md_region = g.add_markdown("_Pick a region: the camera flies to its calibrated view; the image shows "
                                             "baseline | geometry-only | geometry+context (white = reviewed reference)._")
             self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.md_render = g.add_markdown("", visible=False)
+            self.img_render = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
 
         @self.cb_base.on_update
         def _(_e: Any) -> None:
@@ -334,6 +338,15 @@ class Sim:
                 im.thumbnail((1400, 400))
                 self.img_region.image = np.asarray(im)
                 self.img_region.visible = True
+            rc = ROOT / "out_review" / "render_compare" / f"{rid}_v0.png"
+            if rc.exists():                  # same calibrated camera: disc baseline vs EWA Gaussian splatting
+                from PIL import Image
+                im = Image.open(rc).convert("RGB")
+                im.thumbnail((900, 1400))
+                self.md_render.content = ("**Rendering** (same camera): left = disc baseline, right = EWA Gaussians; "
+                                          "rows = clean RGB | depth | visibility | fragment overlay")
+                self.img_render.image = np.asarray(im)
+                self.md_render.visible = self.img_render.visible = True
         with g.add_folder("Selected object (click in the scene)"):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)

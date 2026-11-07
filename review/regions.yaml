@@ -1,86 +1,257 @@
 # Fixed review regions and reviewed reference components (native coordinates, up = -y).
 #
-# References were set by visual review of calibrated renders (out_review/closeups/*.png,
-# 2026-11-07) of the baseline segmentation. They are APPROXIMATE axis-aligned 3D boxes around
-# the visible component, NOT pixel-accurate ground truth and NOT derived from workbook anchors.
-# Ontology (component class): pump, motor, valve (body + handwheel/actuator), pipe run, sensor,
-# vessel, structure, unknown. Assembly membership and asset identity are kept separate.
-#
-# Views: calibrated pinhole cameras (eye -> target, fov deg) used for proposals, SAM and visibility.
-
+# refs (v2, FROZEN 2026-11-07): set on EWA Gaussian renders (pipeline/review_refs.py: reviewer pixel box ->
+# median-depth unprojection -> front-surface AABB, extended along the view direction because the back side is
+# unseen). v2 replaces v1 after better renders showed v1 CLASS errors (RV-01: red circulator pumps were called
+# valves, blue valve actuators were called pumps) and loose boxes. v1 boxes are kept as refs_v1 for history.
+# APPROXIMATE boxes, not pixel-accurate ground truth; NOT derived from workbook anchors.
+# RV-10 is an untouched hold-out: references set before any proposal/repair ran there; never used for tuning.
+# Freeze hash (sha256 of the refs blocks) is printed by `python -m pipeline.evaluate --freeze-check`.
+# Ontology: pump, motor, valve (body + handwheel/actuator), pipe run, sensor, vessel, structure, unknown.
 regions:
-  - id: RV-01
-    name: back-right wall, two inline circulator pumps + handwheel valve
-    views:
-      - {eye: [2.40, 0.15, -2.20], target: [2.40, 0.25, -3.45], fov: 60}
-      - {eye: [1.40, 0.00, -2.50], target: [2.40, 0.25, -3.45], fov: 55}
-    refs:
-      - {id: RC-01, cls: pump, note: "circulator pump A (grey motor head) inline on vertical pipe",
-         box: [[2.64, 0.39, -3.51], [2.82, 0.57, -3.21]]}
-      - {id: RC-02, cls: pump, note: "circulator pump B, head split across baseline 638/395",
-         box: [[2.08, 0.37, -3.51], [2.26, 0.58, -3.16]]}
-      - {id: RC-03, cls: valve, note: "red handwheel valve, inside mixed baseline cluster OBJ-0009",
-         box: [[1.93, -0.28, -3.56], [2.30, 0.12, -3.25]],
-         revised: "2026-11-07 after inspecting out_review/compare/RV-01_v0.png: z_min -3.62 -> -3.56, the box
-           wrongly included wall-side pipes behind the valve's pipe (valve on pipe at z~-3.45, handwheel
-           toward the room). Original box: [[1.93, -0.28, -3.62], [2.30, 0.12, -3.25]]"}
-      - {id: RC-04, cls: pipe run, note: "insulated U-bend lower part (baseline 603/911/213/402)",
-         box: [[2.27, -0.12, -3.73], [2.68, 0.24, -3.38]]}
-  - id: RV-02
-    name: back-left wall, valve on vertical pipe + adjacent parallel pipes
-    views:
-      - {eye: [-1.90, 0.20, -2.40], target: [-1.90, 0.35, -3.50], fov: 60}
-      - {eye: [-1.00, 0.10, -2.60], target: [-1.80, 0.40, -3.50], fov: 55}
-    refs:
-      - {id: RC-05, cls: valve, note: "valve body + ring handwheel (baseline 800 + part of mixed OBJ-0020)",
-         box: [[-1.68, 0.33, -3.42], [-1.40, 0.68, -3.15]]}
-      - {id: RC-06, cls: pipe run, note: "vertical pipe (baseline 192), parallel neighbour of RC-07",
-         box: [[-2.31, -0.58, -3.53], [-2.13, 0.74, -3.39]]}
-      - {id: RC-07, cls: pipe run, note: "thin vertical pipe (baseline 689), must stay separate from RC-06",
-         box: [[-2.47, -0.06, -3.49], [-2.37, 0.44, -3.31]]}
-  - id: RV-03
-    name: front, two red vessels (should stay whole and separate)
-    views:
-      - {eye: [0.60, -0.10, 0.30], target: [0.60, 0.20, 2.00], fov: 60}
-    refs:
-      - {id: RC-08, cls: vessel, note: "red vessel left (baseline 32)",
-         box: [[-0.10, -0.32, 1.58], [0.62, 0.46, 2.30]]}
-      - {id: RC-09, cls: vessel, note: "red vessel right (baseline 39)",
-         box: [[0.62, -0.37, 1.58], [1.38, 0.37, 2.34]]}
-  - id: RV-04
-    name: left wall machine near historical target OBJ-0269 (qualitative only, no reliable reference)
-    views:
-      - {eye: [-2.70, 0.10, -2.60], target: [-3.60, 0.80, -1.30], fov: 60}
-      - {eye: [-2.70, -0.40, -1.00], target: [-3.60, 0.90, -1.60], fov: 60}
-    refs: []
-  # expansion regions (qualitative review only: inspect out_review/compare/<id>_v*.png)
-  - id: RV-05
-    name: back wall, left-centre valves and pipes
-    views:
-      - {eye: [-0.60, 0.00, -2.40], target: [-0.60, 0.30, -3.60], fov: 60}
-      - {eye: [0.20, -0.10, -2.50], target: [-0.60, 0.30, -3.60], fov: 55}
-    refs: []
-  - id: RV-06
-    name: right wall machinery
-    views:
-      - {eye: [2.30, -0.10, -0.80], target: [3.80, 0.70, -0.60], fov: 60}
-      - {eye: [2.60, -0.30, 0.30], target: [3.80, 0.60, -0.80], fov: 60}
-    refs: []
-  - id: RV-07
-    name: front-left corner equipment
-    views:
-      - {eye: [-2.60, -0.10, 1.20], target: [-4.40, 0.60, 2.40], fov: 60}
-      - {eye: [-2.20, -0.20, 2.40], target: [-4.20, 0.50, 2.20], fov: 60}
-    refs: []
-  - id: RV-08
-    name: back wall, centre-right
-    views:
-      - {eye: [0.90, 0.10, -2.30], target: [0.90, 0.30, -3.60], fov: 60}
-      - {eye: [0.10, 0.00, -2.40], target: [0.90, 0.30, -3.60], fov: 55}
-    refs: []
-  - id: RV-09
-    name: front wall centre
-    views:
-      - {eye: [-0.80, -0.10, 1.60], target: [-0.80, 0.30, 3.30], fov: 60}
-      - {eye: [0.20, -0.20, 1.50], target: [-0.80, 0.30, 3.30], fov: 55}
-    refs: []
+- id: RV-01
+  name: back-right wall, two inline circulator pumps + handwheel valve
+  views:
+  - eye: [2.4, 0.15, -2.2]
+    target: [2.4, 0.25, -3.45]
+    fov: 60
+  - eye: [1.4, 0.0, -2.5]
+    target: [2.4, 0.25, -3.45]
+    fov: 55
+  refs:
+  - id: RC2-01
+    cls: pump
+    note: small red circulator pump (motor head + volute), left pipe
+    box:
+    - [2.686, -0.107, -3.525]
+    - [2.777, -0.002, -3.329]
+    source: EWA view0 px [150, 85, 225, 150], median depth band 0.12; extended 0.10 along view direction (back side unseen)
+  - id: RC2-02
+    cls: pump
+    note: red circulator pump (motor + volute + flange), right pipe; v1 RC-03 called it a valve
+    box:
+    - [2.104, -0.151, -3.528]
+    - [2.273, 0.011, -3.224]
+    source: EWA view0 px [450, 40, 575, 195], median depth band 0.15; extended 0.17 along view direction (back side unseen)
+  - id: RC2-03
+    cls: valve
+    note: valve with blue actuator head, left pipe; v1 RC-02 called it a pump
+    box:
+    - [2.691, 0.405, -3.42]
+    - [2.796, 0.501, -3.221]
+    source: EWA view0 px [125, 380, 215, 460], median depth band 0.12; extended 0.10 along view direction (back side unseen)
+  - id: RC2-04
+    cls: valve
+    note: valve with blue actuator head, right pipe; v1 RC-01 called it a pump
+    box:
+    - [2.122, 0.406, -3.41]
+    - [2.232, 0.503, -3.204]
+    source: EWA view0 px [478, 380, 565, 460], median depth band 0.12; extended 0.11 along view direction (back side unseen)
+  - id: RC2-05
+    cls: pipe run
+    note: cream insulated U-bend (both legs + bend)
+    box:
+    - [2.356, -0.249, -4.001]
+    - [2.543, 0.276, -3.394]
+    source: EWA view0 px [300, 0, 410, 295], median depth band 0.15; extended 0.49 along view direction (back side unseen)
+  refs_v1:
+  - id: RC-01
+    cls: pump
+    note: circulator pump A (grey motor head) inline on vertical pipe
+    box:
+    - [2.64, 0.39, -3.51]
+    - [2.82, 0.57, -3.21]
+  - id: RC-02
+    cls: pump
+    note: circulator pump B, head split across baseline 638/395
+    box:
+    - [2.08, 0.37, -3.51]
+    - [2.26, 0.58, -3.16]
+  - id: RC-03
+    cls: valve
+    note: red handwheel valve, inside mixed baseline cluster OBJ-0009
+    box:
+    - [1.93, -0.28, -3.56]
+    - [2.3, 0.12, -3.25]
+    revised: '2026-11-07 after inspecting out_review/compare/RV-01_v0.png: z_min -3.62 -> -3.56, the box wrongly included
+      wall-side pipes behind the valve''s pipe (valve on pipe at z~-3.45, handwheel toward the room). Original box: [[1.93,
+      -0.28, -3.62], [2.30, 0.12, -3.25]]'
+  - id: RC-04
+    cls: pipe run
+    note: insulated U-bend lower part (baseline 603/911/213/402)
+    box:
+    - [2.27, -0.12, -3.73]
+    - [2.68, 0.24, -3.38]
+- id: RV-02
+  name: back-left wall, valve on vertical pipe + adjacent parallel pipes
+  views:
+  - eye: [-1.9, 0.2, -2.4]
+    target: [-1.9, 0.35, -3.5]
+    fov: 60
+  - eye: [-1.0, 0.1, -2.6]
+    target: [-1.8, 0.4, -3.5]
+    fov: 55
+  refs:
+  - id: RC2-06
+    cls: valve
+    note: handwheel valve (wheel + body), lower part cut by the image edge
+    box:
+    - [-1.658, 0.478, -3.648]
+    - [-1.511, 0.782, -3.181]
+    source: EWA view0 px [60, 330, 255, 575], median depth band 0.2; extended 0.27 along view direction (back side unseen)
+  - &id001
+    id: RC-06
+    cls: pipe run
+    note: vertical pipe (baseline 192), parallel neighbour of RC-07
+    box:
+    - [-2.31, -0.58, -3.53]
+    - [-2.13, 0.74, -3.39]
+  - &id002
+    id: RC-07
+    cls: pipe run
+    note: thin vertical pipe (baseline 689), must stay separate from RC-06
+    box:
+    - [-2.47, -0.06, -3.49]
+    - [-2.37, 0.44, -3.31]
+  refs_v1:
+  - id: RC-05
+    cls: valve
+    note: valve body + ring handwheel (baseline 800 + part of mixed OBJ-0020)
+    box:
+    - [-1.68, 0.33, -3.42]
+    - [-1.4, 0.68, -3.15]
+  - *id001
+  - *id002
+- id: RV-03
+  name: front, two red vessels (should stay whole and separate)
+  views:
+  - eye: [0.6, -0.1, 0.3]
+    target: [0.6, 0.2, 2.0]
+    fov: 60
+  refs:
+  - id: RC2-07
+    cls: vessel
+    note: red vessel left (visible part)
+    box:
+    - [0.003, -0.214, 1.672]
+    - [0.571, 0.888, 2.384]
+    source: EWA view0 px [100, 95, 385, 575], median depth band 0.4; extended 0.50 along view direction (back side unseen)
+  - id: RC2-08
+    cls: vessel
+    note: red vessel right (visible part)
+    box:
+    - [0.758, -0.233, 1.461]
+    - [1.264, 0.75, 2.367]
+    source: EWA view0 px [425, 85, 700, 530], median depth band 0.4; extended 0.50 along view direction (back side unseen)
+  refs_v1:
+  - id: RC-08
+    cls: vessel
+    note: red vessel left (baseline 32)
+    box:
+    - [-0.1, -0.32, 1.58]
+    - [0.62, 0.46, 2.3]
+  - id: RC-09
+    cls: vessel
+    note: red vessel right (baseline 39)
+    box:
+    - [0.62, -0.37, 1.58]
+    - [1.38, 0.37, 2.34]
+- id: RV-04
+  name: left wall machine near historical target OBJ-0269 (qualitative only, no reliable reference)
+  views:
+  - eye: [-2.7, 0.1, -2.6]
+    target: [-3.6, 0.8, -1.3]
+    fov: 60
+  - eye: [-2.7, -0.4, -1.0]
+    target: [-3.6, 0.9, -1.6]
+    fov: 60
+  refs: []
+- id: RV-05
+  name: back wall, left-centre valves and pipes
+  views:
+  - eye: [-0.6, 0.0, -2.4]
+    target: [-0.6, 0.3, -3.6]
+    fov: 60
+  - eye: [0.2, -0.1, -2.5]
+    target: [-0.6, 0.3, -3.6]
+    fov: 55
+  refs: []
+- id: RV-06
+  name: right wall machinery
+  views:
+  - eye: [2.3, -0.1, -0.8]
+    target: [3.8, 0.7, -0.6]
+    fov: 60
+  - eye: [2.6, -0.3, 0.3]
+    target: [3.8, 0.6, -0.8]
+    fov: 60
+  refs: []
+- id: RV-07
+  name: front-left corner equipment
+  views:
+  - eye: [-2.6, -0.1, 1.2]
+    target: [-4.4, 0.6, 2.4]
+    fov: 60
+  - eye: [-2.2, -0.2, 2.4]
+    target: [-4.2, 0.5, 2.2]
+    fov: 60
+  refs: []
+- id: RV-08
+  name: back wall, centre-right
+  views:
+  - eye: [0.9, 0.1, -2.3]
+    target: [0.9, 0.3, -3.6]
+    fov: 60
+  - eye: [0.1, 0.0, -2.4]
+    target: [0.9, 0.3, -3.6]
+    fov: 55
+  refs: []
+- id: RV-09
+  name: front wall centre
+  views:
+  - eye: [-0.8, -0.1, 1.6]
+    target: [-0.8, 0.3, 3.3]
+    fov: 60
+  - eye: [0.2, -0.2, 1.5]
+    target: [-0.8, 0.3, 3.3]
+    fov: 55
+  refs: []
+- id: RV-10
+  name: right-back corner, circulator pumps + valves (HOLD-OUT)
+  holdout: true
+  views:
+  - eye: [2.4, -0.1, -1.6]
+    target: [3.8, 0.6, -2.6]
+    fov: 60
+  - eye: [2.0, -0.1, -2.2]
+    target: [3.6, 0.5, -3.0]
+    fov: 60
+  refs:
+  - id: RH-01
+    cls: pump
+    note: dark circulator pump (head + body), top cut by image edge
+    box:
+    - [3.721, -0.125, -2.222]
+    - [4.023, 0.087, -1.939]
+    source: EWA view0 px [60, 0, 215, 90], median depth band 0.12; extended 0.18 along view direction (back side unseen)
+  - id: RH-02
+    cls: valve
+    note: blue cast valve body with brass fittings
+    box:
+    - [3.758, 0.07, -2.331]
+    - [4.189, 0.343, -2.051]
+    source: EWA view0 px [150, 100, 305, 180], median depth band 0.12; extended 0.25 along view direction (back side unseen)
+  - id: RH-03
+    cls: valve
+    note: valve with blue-green actuator head
+    box:
+    - [3.677, 0.403, -2.071]
+    - [3.895, 0.563, -1.865]
+    source: EWA view0 px [95, 262, 192, 350], median depth band 0.12; extended 0.13 along view direction (back side unseen)
+  - id: RH-04
+    cls: pump
+    note: red circulator pump
+    box:
+    - [3.799, -0.139, -3.065]
+    - [4.073, 0.041, -2.846]
+    source: EWA view0 px [400, 0, 500, 90], median depth band 0.12; extended 0.16 along view direction (back side unseen)
