@@ -1,7 +1,7 @@
 # Valmet Field Copilot: Since AI Hackathon 2026
 
 Semantic 3D scene understanding and an AI field-service copilot for the Valmet challenge.
-The pipeline turns the `Industrial Boiler Room.ply` Gaussian splat into framed, labeled assets,
+The pipeline turns the `Equipment Room.ply` Gaussian splat into framed, labeled assets,
 maps the Excel builder pack onto them, walks a service worker along a collision-free path to
 the faulty pump **P-002 (CAVITATION_RISK)**, and gives a grounded AI diagnosis on arrival.
 
@@ -12,7 +12,7 @@ All tunable values are in `config.yaml`.
 
 | Stage | Module | Output |
 |---|---|---|
-| 1. Segmentation | `pipeline/segment.py`: voxel + outlier removal, normal-checked floor/ceiling/wall removal, DBSCAN, direction-class split of pipe networks, collinear pipe merge | `assets.json` (286 objects with 3D boxes) |
+| 1. Segmentation | `pipeline/segment.py`: voxel + outlier removal, normal-checked floor/ceiling/wall removal, DBSCAN, direction-class split of pipe networks, collinear pipe merge | `assets.json` (936 objects with 3D boxes) |
 | 2. Labeling | `pipeline/label.py`: renders each object (front, side, context) and labels it zero-shot with Gemini vision from a fixed vocabulary, falling back to geometry rules | `assets_labeled.json`, `crops/`, `label_contact_sheet.png` |
 | 3. Navigation | `pipeline/navgrid.py`: x–z occupancy grid, obstacles inflated by avatar radius, A*, line-of-sight smoothing, clearance check | `path.json`, `navgrid.png` |
 | 4. Mapping | `pipeline/mapping.py`: Excel assets → objects (label match, geometry rule, seeded fallback) with explicit confidence | `scene_graph.json`, `scene_anchors.csv` |
