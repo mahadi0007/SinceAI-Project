@@ -35,6 +35,7 @@ from pipeline.export_ifc import to_ifc
 from pipeline.load_splat import covariances, load_splat
 from pipeline.propose import sam_model
 from pipeline.views import Camera, render
+from viewer.nudge import add_nudge_gui, gizmo_scale
 
 Cfg = dict[str, Any]
 
@@ -437,9 +438,12 @@ class BimView:
             self.md.content = props_md(self.elem_of[k]).replace("\n", f"{tag}\n", 1)
         c = self.centre[self.src[key]]
         pos, wxyz = self.pose.get(key, (c, np.array([1.0, 0, 0, 0])))
+        extent = float(np.ptp(self._key_points(key), 0).max())
         self.gizmo = self.server.scene.add_transform_controls(
-            "/gizmo", scale=0.6, position=tuple(pos), wxyz=tuple(wxyz), depth_test=False,
-            active_axes=(True, True, True), rotation_limits=((0, 0), (0, 0), (-1000, 1000)))   # yaw only
+            "/gizmo", scale=gizmo_scale(extent=extent, vc=self.cfg["viewer"]),
+            line_width=self.cfg["viewer"].get("gizmo_line_width", 5.0), position=tuple(pos), wxyz=tuple(wxyz),
+            depth_test=False, active_axes=(True, True, False),             # drag on the floor; Lift buttons go up / down
+            rotation_limits=((0, 0), (0, 0), (-1000, 1000)))               # yaw only
 
         @self.gizmo.on_update
         def _(_ev: Any) -> None:
@@ -448,6 +452,18 @@ class BimView:
             self._save_edits()
 
     # --- edits ---
+    def nudge(self, dp: np.ndarray, yaw: float) -> None:
+        """Step the selected object (Move / Lift / Turn buttons)."""
+        key = self.selected
+        if key is None:
+            return
+        pos, wxyz = self.pose.get(key, (self.centre[self.src[key]], np.array([1.0, 0, 0, 0])))
+        self.pose[key] = (np.asarray(pos) + dp, (SO3.exp(np.array([0, 0, yaw])) @ SO3(np.asarray(wxyz))).wxyz)
+        if self.gizmo is not None:
+            self.gizmo.position, self.gizmo.wxyz = tuple(self.pose[key][0]), tuple(self.pose[key][1])
+        self._apply_pose(key)
+        self._save_edits()
+
     def delete(self) -> None:
         if self.selected is None:
             return
@@ -859,6 +875,13 @@ class BimView:
         with gui.add_folder("Edit selected"):
             b_dup, b_del = gui.add_button("Duplicate"), gui.add_button("Delete")
             b_reset, b_none = gui.add_button("Reset object"), gui.add_button("Deselect")
+            add_nudge_gui(
+                gui=gui,
+                vc=self.cfg["viewer"],
+                up=np.array([0.0, 0.0, 1.0]),
+                units_to_m=1.0,
+                on_nudge=self.nudge,
+            )
             self.smart = gui.add_checkbox("Smart select (SAM)", False)
             b_bigger, b_smaller = gui.add_button("Selection: bigger"), gui.add_button("Selection: smaller")
             self.add_parts = gui.add_checkbox("Click adds parts", False)

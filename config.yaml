@@ -246,6 +246,11 @@ viewer:
   movable_color: [0, 220, 120]  # "Show movable objects" frames (objects in removable_rows.npz)
   duplicate_offset: [0.5, 0.0, 0.5]  # scene units; a copy is placed beside the original
   selected_thickness: 1.5    # thin selection edges; selection never adds solid box faces
+  gizmo_size: 1.2           # move gizmo size / object's largest side
+  gizmo_min_scale: 0.3
+  gizmo_line_width: 5.0
+  nudge_step_m: 0.1          # default Move / Lift step
+  nudge_turn_deg: 15
   fly_min_dist: 1.0
   fly_dist_factor: 2.0
   fly_height: 0.3

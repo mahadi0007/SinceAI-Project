@@ -22,6 +22,7 @@ from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
 from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
+from viewer.nudge import add_nudge_gui, gizmo_scale, up_vector
 
 Cfg = dict[str, Any]
 # Viser renders markdown tables as Mantine tables without borders; this <style> (injected once through an
@@ -1280,6 +1281,13 @@ class Sim:
         cb_show = g.add_checkbox("Show movable objects", self.show_movable)
         self.md_edit = g.add_markdown("_Nothing selected._")
         b_move = g.add_button("Move", icon="arrows-move")
+        add_nudge_gui(
+            gui=g,
+            vc=self.vc,
+            up=up_vector(self.cfg["scene"]["up_direction"]),
+            units_to_m=self.cfg["scene"]["units_to_m"],
+            on_nudge=self.nudge,
+        )
         b_dup = g.add_button("Duplicate", icon="copy")
         b_remove = g.add_button("Remove", icon="trash", color="red")
         b_restore = g.add_button("Restore object", hint="Put it back where it was and delete its copies")
@@ -1368,8 +1376,12 @@ class Sim:
     def show_gizmo(self, name: str) -> None:
         h = self.inst[name]["h"]
         self.hide_gizmo()
+        up = up_vector(self.cfg["scene"]["up_direction"])
+        extent = float(np.ptp(self.movable[self.inst[name]["oid"]]["box"].reshape(-1, 3), 0).max())
         self.gizmo = self.server.scene.add_transform_controls(
-            "/gizmo", scale=0.6, position=h.position, wxyz=h.wxyz, depth_test=False,
+            "/gizmo", scale=gizmo_scale(extent=extent, vc=self.vc), line_width=self.vc.get("gizmo_line_width", 5.0),
+            position=h.position, wxyz=h.wxyz, depth_test=False,
+            active_axes=tuple(bool(x) for x in up == 0),                 # drag on the floor; Lift buttons go up / down
             rotation_limits=((0, 0), (-1000, 1000), (0, 0)))               # yaw only (up = -y)
 
         @self.gizmo.on_update
@@ -1377,6 +1389,20 @@ class Sim:
             h.position, h.wxyz = self.gizmo.position, self.gizmo.wxyz
             self.h_selected.points = self.inst_box(name)
             self.save_edits()
+
+    def nudge(self, dp: np.ndarray, yaw: float) -> None:
+        """Step the selected object (Move / Lift / Turn buttons)."""
+        name = self.sel_inst
+        if not name or self.inst[name]["removed"]:
+            return
+        h = self.inst[name]["h"]
+        up = up_vector(self.cfg["scene"]["up_direction"])
+        h.position = tuple(np.asarray(h.position) + dp)
+        h.wxyz = tuple((SO3.exp(up * yaw) @ SO3(np.asarray(h.wxyz))).wxyz)
+        if self.gizmo is not None:
+            self.gizmo.position, self.gizmo.wxyz = h.position, h.wxyz
+        self.h_selected.points = self.inst_box(name)
+        self.save_edits()
 
     def hide_gizmo(self) -> None:
         if self.gizmo is not None:
