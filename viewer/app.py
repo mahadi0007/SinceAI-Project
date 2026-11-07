@@ -50,6 +50,20 @@ def edges_for(nodes: list[dict], colors: dict[str, list[int]]) -> tuple[np.ndarr
     return np.concatenate(segs), np.concatenate(cols)
 
 
+AVATAR_LENGTHS = ("hip_h", "hip_dx", "leg", "torso", "torso_h", "shoulder_h", "shoulder_dx",
+                  "arm", "head_h", "head_r", "stride", "bob")
+
+
+def scaled_avatar(av: dict) -> dict:
+    """Apply avatar.scale to every length (sizes, heights, stride); angles and colours unchanged."""
+    s = float(av.get("scale", 1.0))
+    out = dict(av)
+    for k in AVATAR_LENGTHS:
+        v = av[k]
+        out[k] = [x * s for x in v] if isinstance(v, list) else v * s
+    return out
+
+
 def label_text(n: dict) -> str:
     """'OBJ-0018 · P-002 pump · attention_required · health 45' or 'OBJ-0142 · ladder/stairs'."""
     if n["asset"]:
@@ -125,6 +139,7 @@ class Sim:
         self.server = viser.ViserServer(port=self.vc["port"])
         self.server.scene.set_up_direction(self.cfg["scene"]["up_direction"])
         self._labels: list[Any] = []
+        self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
         self.server.scene.on_click()(self.on_scene_click)
@@ -169,7 +184,7 @@ class Sim:
     def _build_avatar(self) -> None:
         """Articulated worker. Local frame: forward +z, left/right x, up = -y (native).
         Limbs hang from pivot frames (hips, shoulders) that swing about local x."""
-        sc, av = self.server.scene, self.vc["avatar"]
+        sc, av = self.server.scene, self.av
         self.h_avatar = sc.add_frame("/avatar", show_axes=False)
         self.h_body = sc.add_frame("/avatar/body", show_axes=False)       # bobs while walking
         col = {k: tuple(v) for k, v in av["colors"].items()}
@@ -198,7 +213,7 @@ class Sim:
             self.h_limbs[f"hip_{side}"], self.h_limbs[f"shoulder_{side}"] = hip, sh
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
-        av = self.vc["avatar"]
+        av = self.av
         tangent = self.tangent()
         yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> path direction
         self.h_avatar.position = tuple(p)

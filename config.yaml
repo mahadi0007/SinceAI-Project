@@ -161,18 +161,19 @@ viewer:
   fly_dist_factor: 2.0
   fly_height: 0.3
   path_color: [220, 20, 60]
-  avatar:                   # articulated worker, ~1.45 units (~1.7 m) tall; heights above floor
+  avatar:                   # articulated worker; lengths below are for scale 1.0 (~1.73 m at 1 u = 1.15 m)
+    scale: 1.0                    # overall size multiplier (1.0 = values below as written)
     hip_h: 0.72
     hip_dx: 0.08
     leg: [0.11, 0.70, 0.13]       # box dims x, length, z
-    torso: [0.32, 0.50, 0.18]
+    torso: [0.27, 0.50, 0.18]     # narrowed to match 0.40 m shoulders
     torso_h: 0.98                 # torso centre
     shoulder_h: 1.20
-    shoulder_dx: 0.21
+    shoulder_dx: 0.174            # 2 x 0.174 u x 1.15 = 0.40 m shoulder width
     arm: [0.08, 0.52, 0.09]
     head_h: 1.34
     head_r: 0.09
-    stride: 0.9                   # distance per full walk cycle (units)
+    stride: 0.81                  # distance per full walk cycle (units)
     leg_swing: 0.45               # rad
     arm_swing: 0.35               # rad
     bob: 0.025
