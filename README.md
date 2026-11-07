@@ -95,6 +95,7 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
 `walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
 
 - **Claude Code:** `.mcp.json` registers the server as `valmet-copilot`; open Claude Code in this folder and approve it.
+  On Linux/macOS set `VALMET_PYTHON=.venv/bin/python` first (defaults to the Windows venv path).
 - **Claude Desktop:** add to `claude_desktop_config.json`:
   `"valmet-copilot": {"command": "<repo>/.venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"]}`
 - Example questions: *"Which pumps need attention?"*, *"Why is P-002 flagged? Cite evidence."*, *"Take me to M-006 in the viewer."*,
