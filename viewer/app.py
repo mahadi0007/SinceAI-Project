@@ -402,6 +402,7 @@ class Sim:
         self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
         self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
         self._build_walk_mode_gui(g)
+        self._build_chat_gui(g)
         self.cb_boxes = g.add_checkbox("Show all frames", True)
         dc = self.vc["display"]
         with g.add_folder("Scene display", expand_by_default=False):
@@ -810,6 +811,55 @@ class Sim:
             self.pause_until = time.time() + float(self.tour["pause_s"])
 
     # --- routes: inspection tour vs. go to one equipment ---
+    def _build_chat_gui(self, g: Any) -> None:
+        """Chat: quick commands (instant, free) -> Claude Code headless with our MCP tools."""
+        with g.add_folder("Ask the copilot (chat)"):
+            self.tx_chat = g.add_text("Question", "Which assets need attention?")
+            b_chat = g.add_button("Ask", color="violet")
+            self.md_chat_status = g.add_markdown("", visible=False)
+            self.md_chat = g.add_markdown("_Type a question or a command (e.g. `take me to M-006`, `start tour`), "
+                                          "then press **Ask**. Type `help` for the quick commands._")
+        self._chat_busy = False
+
+        @b_chat.on_click
+        def _(_e: Any) -> None:
+            q = self.tx_chat.value.strip()
+            if q and not self._chat_busy:
+                threading.Thread(target=self.chat, args=(q,), daemon=True).start()
+
+    def chat_act(self, cmd: str, target: str) -> str:
+        """Viewer actions for quick commands (same handlers as the MCP remote commands)."""
+        if cmd == "tour":
+            res = self.handle_command({"cmd": "tour", "stops": [t for t in target.split(",") if t]})
+        else:
+            res = self.handle_command({"cmd": cmd, "target": target})
+        return ("" if res.get("ok") else "⚠️ ") + res.get("message", "")
+
+    def chat(self, question: str) -> None:
+        from copilot.chat import answer, parse_quick
+        self._chat_busy = True
+        quick = self.cfg["chat"].get("quick_commands", True) and parse_quick(question) is not None
+        t0 = time.time()
+
+        def tick() -> None:
+            while self._chat_busy:
+                self.md_chat_status.content = (f"⏳ **Claude is working** (copilot tools via MCP) · "
+                                               f"{time.time() - t0:.0f} s")
+                time.sleep(0.5)
+
+        self.md_chat_status.visible = not quick
+        if not quick:
+            threading.Thread(target=tick, daemon=True).start()
+        try:
+            text, route = answer(question, self.cfg["chat"], self.chat_act)
+        except Exception as e:  # noqa: BLE001 - chat must never break the viewer
+            text, route = f"⚠️ {type(e).__name__}: {e}", "error"
+        finally:
+            self._chat_busy = False
+            self.md_chat_status.visible = False
+        badge = "⚡ quick command" if route == "quick" else f"🤖 Claude · {time.time() - t0:.0f} s"
+        self.md_chat.content = f"> **You:** {question}\n\n{text}\n\n_{badge}_"
+
     def _build_walk_mode_gui(self, g: Any) -> None:
         """Two clear mode buttons near the top: Inspection tour | Go to equipment."""
         with g.add_folder("Walk mode"):
