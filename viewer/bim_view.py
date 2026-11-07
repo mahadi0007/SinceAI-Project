@@ -30,6 +30,7 @@ import viser
 from scipy.spatial import cKDTree
 from viser.transforms import SO3
 
+from pipeline.bim_provenance import check_bim, scene_revision
 from pipeline.common import load_config, out_path, repo_path
 from pipeline.export_ifc import to_ifc
 from pipeline.load_splat import covariances, load_splat
@@ -123,13 +124,19 @@ class BimView:
     def __init__(self, cfg: Cfg, apply_edits: bool = True) -> None:
         self.cfg, u2m = cfg, cfg["scene"]["units_to_m"]
         t = time.time()
+        self.revision = scene_revision(cfg)
+        check_bim(cfg, self.revision)                                      # scene.ifc built from this scene version
         self.f = ifcopenshell.open(str(out_path(cfg, "scene.ifc")))
         self.elems = tessellate(self.f)
         print(f"[ifc] {len(self.elems)} elements tessellated in {time.time() - t:.1f}s")
         with open(out_path(cfg, "scene_graph.json"), encoding="utf-8") as fh:
             self.objs = json.load(fh)["objects"]
         index = {o["id"]: k for k, o in enumerate(self.objs)}
-        self.elem_of = {index[e["psets"]["Pset_ScanExtraction"]["ObjectId"]]: e for e in self.elems}
+        self.elem_of = {index[e["psets"]["Pset_ScanExtraction"]["ObjectId"]]: e for e in self.elems
+                        if e["psets"].get("Pset_ScanExtraction", {}).get("SegmentationRevision")
+                        == self.revision["segmentation"]}
+        if len(self.elem_of) != len(self.elems):
+            raise RuntimeError(f"{len(self.elems) - len(self.elem_of)} IFC elements belong to another segmentation")
 
         seg = np.load(out_path(cfg, "segment_points.npz"))
         self.pts = to_ifc(seg["xyz"], u2m).astype(np.float32)
@@ -150,8 +157,9 @@ class BimView:
         self.busy = threading.Lock()                                       # clicks arriving mid-edit are dropped
         rpath = out_path(cfg, "removable.json")
         self.allowed: set[int] | None = None                               # selectable objects (removable.json)
-        if apply_edits and rpath.exists():
-            ids = set(json.loads(rpath.read_text(encoding="utf-8"))["removable"])
+        rdata = json.loads(rpath.read_text(encoding="utf-8")) if rpath.exists() else {}
+        if apply_edits and rdata.get("revision", {}).get("segmentation") == self.revision["segmentation"]:
+            ids = set(rdata["removable"])
             self.allowed = {k for k, o in enumerate(self.objs) if o["id"] in ids}
         self.pose: dict[int, tuple[np.ndarray, np.ndarray]] = {}           # key -> (gizmo position, wxyz)
         self.removed: set[int] = set()
