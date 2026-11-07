@@ -47,6 +47,8 @@ python -m pipeline.mapping
 python -m copilot.agent P-002   # optional: diagnosis from the command line
 python -m copilot.voice --dummy --play   # test the ElevenLabs voice with a sample diagnosis (no LLM/data)
 python -m copilot.voice P-002   # optional: build/cache the spoken briefing (out/voice_cache/)
+VALMET_OUT=out_geo python -m pipeline.export_ifc     # IFC/BIM model with scan meshes + deviation -> scene.ifc
+VALMET_OUT=out_geo python -m viewer.removable   # objects that can be moved/removed/duplicated (viewer.removable.include)
 python -m viewer.app            # open http://localhost:8080 and press Play
 ```
 
