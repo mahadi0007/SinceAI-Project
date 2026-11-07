@@ -34,7 +34,7 @@ def sim():
     s.visit_active = None
     s.visit_arrival_gap = 0.0
     s.h_stop_fill = s.h_stop_label = None
-    s.h_stop_box = Handle(visible=False)
+    s.h_stop_box = Handle(visible=False, wireframe=True)
     s.h_highlight = Handle(visible=True)
     s.h_selected = Handle(visible=True)
     s.h_all_labels = [Handle(visible=True), Handle(visible=True)]
@@ -43,7 +43,8 @@ def sim():
     s.dd_labels = SimpleNamespace(value='Equipment')
     s.sl_radius = SimpleNamespace(value=1.0)
     s.vc = dict(colors={'healthy': [100, 100, 100], 'watch': [100, 100, 100]},
-                stop_fill_pad=.03, stop_fill_opacity=.14, stop_label_scale=1.2,
+                stop_outline_pad=.01, stop_outline_opacity=.35, stop_label_scale=1.2,
+                selected_color=[255, 0, 255],
                 visit_release_margin=.25)
     s.server = SimpleNamespace(scene=Scene())
     s.worker_pos = np.array([.8, 1, 0])
@@ -66,18 +67,20 @@ def test_health_colors(state, expected):
 
 def test_highlight_is_steady_after_pause_expires_and_while_walking_away(sim):
     sim.highlight_stop(dict(object_id='A', kind='stop'))
-    fill = sim.h_stop_fill
+    outline = sim.h_stop_box
+    assert sim.h_stop_fill is None  # No filled surface may obscure the splats.
+    assert outline.wireframe and outline.opacity == .35
     sim.end_stop()
     assert sim.stop_active is None  # tour briefing state is released independently
     for now in (0.0, .5, 100000.0):
         sim.blink_stop(now)
-        assert sim.h_stop_box.visible and fill.visible
+        assert outline.visible
     sim.worker_pos = np.array([1.3, 1, 0])  # gap 1.1: just outside entry radius, within release band
     sim.update_visit_highlight(sim.worker_pos)
-    assert sim.visit_active['object_id'] == 'A' and not fill.removed
+    assert sim.visit_active['object_id'] == 'A' and outline.visible
     sim.worker_pos = np.array([1.5, 1, 0])  # gap 1.3: departed
     sim.update_visit_highlight(sim.worker_pos)
-    assert sim.visit_active is None and fill.removed and sim.h_stop_label is None
+    assert sim.visit_active is None and not outline.visible and sim.h_stop_label is None
     assert sim.h_all_labels[0].visible and sim.h_selected.visible
 
 
@@ -90,13 +93,13 @@ def test_arrival_gap_is_respected_when_route_stops_outside_slider_radius(sim):
     assert sim.visit_active is None
 
 
-def test_next_visit_replaces_old_fill_and_suppresses_duplicate_label(sim):
+def test_next_visit_recolors_outline_and_suppresses_duplicate_label(sim):
     sim.highlight_stop(dict(object_id='A', kind='target'))
-    old_fill, old_label = sim.h_stop_fill, sim.h_stop_label
+    outline, old_label = sim.h_stop_box, sim.h_stop_label
     assert not sim.h_all_labels[0].visible and not sim.h_selected.visible
     sim.highlight_stop(dict(object_id='B', kind='goto'))
-    assert old_fill.removed and old_label.removed
-    assert sim.h_stop_fill.color == (255, 0, 20)
+    assert old_label.removed and sim.h_stop_fill is None
+    assert outline.color == (255, 0, 20) and outline.opacity == .35
     assert sim.h_all_labels[0].visible and not sim.h_all_labels[1].visible
     assert sim.h_selected.visible and sim.stop_active['object_id'] == 'B'
 
@@ -107,7 +110,7 @@ def test_new_route_keeps_previous_visit_while_worker_is_still_beside_it(sim):
     sim.sl_pos = SimpleNamespace(max=0., value=0.)
     sim.draw_path = lambda: None
     sim.set_route([sim.worker_pos, [4, 1, 0]], [])
-    assert sim.visit_active['object_id'] == 'A' and sim.h_stop_fill.visible
+    assert sim.visit_active['object_id'] == 'A' and sim.h_stop_box.visible
     assert sim.pause_left == 0 and sim.face_target is None
 
 
@@ -118,7 +121,7 @@ def test_persistent_visual_does_not_delay_target_briefing(sim):
     assert sim.warning_stop_due()
     sim.end_stop()
     assert not sim.warning_stop_due()
-    assert sim.visit_active['object_id'] == 'A' and sim.h_stop_fill.visible
+    assert sim.visit_active['object_id'] == 'A' and sim.h_stop_box.visible
 
 
 def test_oren_selection_fill_is_hidden_only_for_the_active_original(sim):
@@ -132,3 +135,19 @@ def test_oren_selection_fill_is_hidden_only_for_the_active_original(sim):
     sim.clear_stop_highlight()
     assert sim.h_selected_fill.visible
     assert sim.visit_active is None and sim.stop_active is None
+
+
+def test_click_selection_does_not_add_a_solid_box(sim, monkeypatch):
+    old_fill = sim.h_selected_fill = Handle(visible=True, removed=False)
+    monkeypatch.setattr(sim.server.scene, 'add_box', lambda *a, **kw: pytest.fail('solid selection box'))
+    sim.mark_selected(sim.nodes[0])
+    assert old_fill.removed and sim.h_selected_fill is None
+    assert sim.h_selected.points.shape == (12, 2, 3)
+
+
+def test_health_outline_matches_object_bounds_without_a_surface(sim, monkeypatch):
+    monkeypatch.setattr(sim.server.scene, 'add_box', lambda *a, **kw: pytest.fail('solid health box'))
+    sim.highlight_stop(dict(object_id='A', kind='goto'))
+    np.testing.assert_allclose(sim.h_stop_box.dimensions, [.42, .52, .42])
+    np.testing.assert_allclose(sim.h_stop_box.position, [0, .25, 0])
+    assert sim.h_stop_fill is None and sim.h_stop_box.visible

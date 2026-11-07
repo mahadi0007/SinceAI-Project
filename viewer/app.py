@@ -419,8 +419,12 @@ class Sim:
         self.h_highlight = sc.add_line_segments("/highlight", *edges_for([], self.vc["colors"]),
                                                 thickness=self.vc["highlight_thickness"],
                                                 thickness_units="screen")
-        self.h_stop_box = sc.add_line_segments("/stop/box", *edges_for([], self.vc["colors"]),
-                                               thickness=self.vc["stop_box_thickness"], thickness_units="screen")
+        # Wireframe geometry has no box faces in front of the splats. Unlike line segments,
+        # a box material supports actual alpha transparency for its outline.
+        self.h_stop_box = sc.add_box(
+            "/stop/box", (255, 255, 255), (1., 1., 1.), wireframe=True,
+            opacity=self.vc.get("stop_outline_opacity", .35), visible=False,
+            cast_shadow=False, receive_shadow=False)
         self.h_stop_fill: Any = None
         self.h_stop_label: Any = None
         self.h_selected = sc.add_line_segments("/selected", *edges_for([], self.vc["colors"]),
@@ -1192,19 +1196,17 @@ class Sim:
             self.select(n, inst=self._picked_inst)
 
     def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
-        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour.
+        """Highlight selection with thin edges; never cover the equipment with filled box faces.
         segs: the object's current box edges (a moved instance); default = its box in the scan."""
         if segs is None:
             segs, _ = edges_for([n], self.vc["colors"])
         col = np.array(self.vc["selected_color"], np.uint8)
         self.h_selected.points = segs
         self.h_selected.colors = np.tile(col, (len(segs), 2, 1))
-        pts = np.asarray(segs).reshape(-1, 3)
-        lo, hi = pts.min(0), pts.max(0)
-        pad = self.vc["stop_fill_pad"]
-        self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
-            "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
-            opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
+        old_fill = getattr(self, "h_selected_fill", None)
+        if old_fill is not None:
+            old_fill.remove()
+        self.h_selected_fill = None
         self.selection_highlight_id = n["id"]
         self._sync_visit_labels()
 
@@ -1840,19 +1842,17 @@ class Sim:
         self.playing = True
 
     def highlight_stop(self, st: dict) -> None:
-        """Thick coloured frame + translucent fill + big label on the stop's equipment; worker faces it."""
+        """Transparent health outline and label, with no surface hiding the actual equipment."""
         n = next(x for x in self.nodes if x["id"] == st["object_id"])
         self.clear_visit_highlight()
         col, title = visit_style(n)
-        segs, _ = edges_for([n], self.vc["colors"])
-        self.h_stop_box.points = segs
-        self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
-        self.h_stop_box.visible = True
         lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
-        pad = self.vc["stop_fill_pad"]
-        self.h_stop_fill = self.server.scene.add_box(
-            "/stop/fill", tuple(col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
-            opacity=self.vc["stop_fill_opacity"], cast_shadow=False, receive_shadow=False)
+        pad = self.vc.get("stop_outline_pad", .01)
+        self.h_stop_box.dimensions = tuple(np.maximum(hi - lo + 2 * pad, 1e-5))
+        self.h_stop_box.position = tuple((lo + hi) / 2)
+        self.h_stop_box.color = col
+        self.h_stop_box.opacity = self.vc.get("stop_outline_opacity", .35)
+        self.h_stop_box.visible = True
         self.h_stop_label = self.server.scene.add_label(
             "/stop/label", title,
             position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
@@ -1872,7 +1872,7 @@ class Sim:
             self.h_stop_fill.visible = self.visit_active is not None
 
     def clear_visit_highlight(self) -> None:
-        self.h_stop_box.points, self.h_stop_box.colors = edges_for([], self.vc["colors"])
+        self.h_stop_box.visible = False
         for h in (self.h_stop_fill, self.h_stop_label):
             if h is not None:
                 h.remove()

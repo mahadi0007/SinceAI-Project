@@ -222,10 +222,9 @@ viewer:
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
   use_tour: true            # walk out/tour.json (door -> warning assets -> target) if it exists
-  stop_box_thickness: 9.0   # vivid, steady health outline on visited equipment (screen px)
-  stop_fill_opacity: 0.22   # saturated fill while preserving the equipment underneath
+  stop_outline_opacity: 0.35  # 65% transparent, thin wireframe; no filled faces obscure the equipment
+  stop_outline_pad: 0.01      # small gap around equipment, in scene units
   visit_release_margin: 0.25  # hold the health highlight until the worker leaves proximity + this gap
-  stop_fill_pad: 0.03       # fill box slightly larger than the object box (units)
   stop_label_scale: 1.2     # big status label above the equipment
   display:                  # splat display: groups can be hidden in the viewer ("Scene display" panel)
     show_ceiling: true
@@ -245,8 +244,7 @@ viewer:
   selected_color: [255, 0, 255]
   movable_color: [0, 220, 120]  # "Show movable objects" frames (objects in removable_rows.npz)
   duplicate_offset: [0.5, 0.0, 0.5]  # scene units; a copy is placed beside the original
-  selected_thickness: 5.0
-  selected_fill_opacity: 0.22  # translucent fill of the selected object (frame + fill in selected_color)
+  selected_thickness: 1.5    # thin selection edges; selection never adds solid box faces
   fly_min_dist: 1.0
   fly_dist_factor: 2.0
   fly_height: 0.3
