@@ -137,6 +137,18 @@ def status_of(node: dict) -> str:
     return node["asset"]["condition_state"] if node["asset"] else "no_record"
 
 
+def visit_style(node: dict) -> tuple[tuple[int, int, int], str]:
+    """Vivid binary health colors; unknown equipment stays neutral."""
+    asset = node.get("asset") or {}
+    state = str(asset.get("condition_state", "")).strip().lower()
+    name = asset.get("tag") or node["id"]
+    if state == "healthy":
+        return (0, 255, 40), f"{name} · HEALTHY"
+    if state and state not in ("no_record", "unknown", "unassigned"):
+        return (255, 0, 20), f"{name} · {state.replace('_', ' ').upper()}"
+    return (170, 180, 190), f"{name} · STATUS UNKNOWN"
+
+
 def box_edges(lo: list[float], hi: list[float]) -> np.ndarray:
     c = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
     return np.array([[c[a], c[b]] for a, b in EDGES], np.float32)
@@ -260,6 +272,8 @@ class Sim:
         self._saved_cams: dict[int, tuple] = {}      # each browser's own camera, restored when POV is turned off
         self._pov_look: np.ndarray | None = None     # smoothed POV look-at point
         self.stop_active: dict | None = None         # tour stop currently highlighted
+        self.visit_active: dict | None = None        # visual lifetime is independent of stop/briefing timers
+        self.visit_arrival_gap = 0.0
         self.walk_mode = "tour"                      # "tour" (ends at faulty target) | "goto" (one equipment)
         self.tour_route = (self.pts.copy(), list(self.stops))
         self.planner: Any = None                     # pipeline.tour.WalkPlanner, created on first "Go to"
@@ -487,7 +501,7 @@ class Sim:
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
-        if self.face_target is not None:                                # at a tour stop: face the equipment
+        if self.face_target is not None and not moving:                 # face equipment only while standing
             tangent = self.face_target - p
         elif self.arrived:                                              # face the target
             tangent = np.array(self.target["center"]) - p
@@ -846,7 +860,7 @@ class Sim:
                 self.dist = float(self.sl_pos.value)
                 self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
                 self.pause_until = self.pause_left = 0.0
-                self.clear_stop_highlight()
+                self.end_stop()
                 self.update()
 
     # More tab: view settings, clicked-object inspector, boundary-repair review
@@ -866,7 +880,8 @@ class Sim:
             self.sl_speed = g.add_slider("Walk speed (u/s)", 0.1, 2.0, 0.1, self.vc["walk_speed"])
             self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
             self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
-            self.cb_boxes = g.add_checkbox("Show all frames", True)
+            self.cb_boxes = g.add_checkbox("Show all frames", False)
+            self.h_boxes.visible = False
         dc = self.vc["display"]
         with g.add_folder("Scene display", expand_by_default=False):
             cb_ceiling = g.add_checkbox("Show ceiling", dc["show_ceiling"])
@@ -919,6 +934,7 @@ class Sim:
             mode = self.dd_labels.value
             for h, eq in zip(self.h_all_labels, self.is_equipment):
                 h.visible = label_visible(mode, eq)
+            self._sync_visit_labels()
             self.update()
 
         @self.cb_boxes.on_update
@@ -1069,6 +1085,7 @@ class Sim:
 
     def update(self) -> None:
         p = self.position()
+        self.update_visit_highlight(p)
         if self.walk_mode == "tour":            # "Go to equipment" never auto-diagnoses (paid budget)
             at_target = (self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
                          and not self.warning_stop_due())
@@ -1077,23 +1094,53 @@ class Sim:
                 self.on_arrival()
             elif not at_target and self.arrived:
                 self.leave_target()
-        self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1])
+        self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1] and time.time() >= self.pause_until)
         r = float(self.sl_radius.value)
         idx = self.tree.query_ball_point(p[[0, 2]], r + self.max_half)
         near_all = [self.nodes[i] for i in idx if self.box_gap(self.nodes[i], p) <= r]
         mapped = [n for n in near_all if n["asset"]]
         others = [n for n in near_all if not n["asset"]]
-        self.h_highlight.points, self.h_highlight.colors = edges_for(near_all, self.vc["highlight_colors"])
+        # One health highlight at a time; nearby-object details remain available in the panels.
+        self.h_highlight.visible = False
         for h in self._labels:
             h.remove()
         show = []                                        # persistent labels cover the other modes
         if self.dd_labels.value == "Nearby only":
             show = mapped + [n for n in others if n["label"] not in self.vc["near_label_skip"]]
+        if self.visit_active is not None:
+            show = [n for n in show if n["id"] != self.visit_active["object_id"]]
         self._labels = [self.server.scene.add_label(
             f"/near/{n['id']}", label_text(n),
             position=(n["center"][0], n["bbox_min"][1], n["center"][2]), anchor="bottom-center",
             font_screen_scale=1.0 if n["asset"] else self.vc["other_label_scale"])
             for n in show]
+
+    def update_visit_highlight(self, p: np.ndarray) -> None:
+        """Release on departure, with hysteresis to avoid flicker at the proximity boundary."""
+        if self.visit_active is None:
+            return
+        n = next((n for n in self.nodes if n["id"] == self.visit_active["object_id"]), None)
+        radius = max(float(self.sl_radius.value), self.visit_arrival_gap)
+        if n is None or self.box_gap(n, p) > radius + float(self.vc.get("visit_release_margin", .25)):
+            self.clear_visit_highlight()
+        else:
+            self.blink_stop(0.0)
+
+    def _sync_visit_labels(self) -> None:
+        """Keep the health outline/fill legible without discarding Oren's selection controls."""
+        active = self.visit_active["object_id"] if self.visit_active else None
+        mode = getattr(getattr(self, "dd_labels", None), "value", self.vc.get("label_mode", "Equipment"))
+        for n, h, eq in zip(self.nodes, self.h_all_labels, self.is_equipment):
+            h.visible = n["id"] != active and label_visible(mode, eq)
+        selected = getattr(self, "selection_highlight_id", None)
+        if selected is None and self.selected is not None:
+            selected = self.selected["id"]
+        # A separately moved copy retains its own selection feedback.
+        same = active is not None and selected == active and getattr(self, "sel_inst", None) in (None, active)
+        self.h_selected.visible = not same
+        fill = getattr(self, "h_selected_fill", None)
+        if fill is not None:
+            fill.visible = not same
 
     def warning_stop_due(self) -> bool:
         """True while a tour warning stop is shown, or (during playback) still due at this spot.
@@ -1158,6 +1205,8 @@ class Sim:
         self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
             "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
             opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
+        self.selection_highlight_id = n["id"]
+        self._sync_visit_labels()
 
     def select(self, n: dict, inst: str | None = None) -> None:
         self.selected = n
@@ -1347,7 +1396,8 @@ class Sim:
         f = getattr(self, "_facing", self.tangent())
         eye_h = 0.94 * self.rig.height_units if self.rig is not None else self.av["head_h"]
         eye = p + up * (eye_h + float(self.h_body.position[1])) + f * pc["eye_forward"]
-        focus = self.face_target if self.face_target is not None else (
+        walking = self.playing and self.dist < self.s[-1] and time.time() >= self.pause_until
+        focus = self.face_target if self.face_target is not None and not walking else (
             np.array(self.target["center"]) if self.arrived else None)
         if focus is not None:
             # turn to the equipment, but tilt the head only as far as a person would: low or overhead
@@ -1490,7 +1540,7 @@ class Sim:
             if self.playing and now < self.pause_until and self.stop_active is not None:
                 self.blink_stop(now)                                   # pausing at a stop
             elif self.playing and self.stop_active is not None and self.stop_active["kind"] != "target":
-                self.clear_stop_highlight()                            # walking on to the next stop
+                self.end_stop()                                       # visual highlight lasts until departure
             if self.playing and now >= self.pause_until:
                 nxt = self.stop_s[self.next_stop] if self.next_stop < len(self.stops) else float(self.s[-1])
                 self.dist = min(self.dist + float(self.sl_speed.value) * dt, nxt, float(self.s[-1]))
@@ -1748,7 +1798,9 @@ class Sim:
         self.stops = stops
         self.stop_s = [float(self.s[min(st["sample_index"], len(self.s) - 1)]) for st in stops]
         self.next_stop, self.pause_until, self.dist = 0, 0.0, 0.0
-        self.clear_stop_highlight()
+        self.pause_left = 0.0
+        self.end_stop()
+        self.update_visit_highlight(self.position())
         self.sl_pos.max = float(self.s[-1])
         self.sl_pos.value = 0.0
         self.draw_path()
@@ -1790,7 +1842,8 @@ class Sim:
     def highlight_stop(self, st: dict) -> None:
         """Thick coloured frame + translucent fill + big label on the stop's equipment; worker faces it."""
         n = next(x for x in self.nodes if x["id"] == st["object_id"])
-        col = self.vc["highlight_colors"].get(st["condition_state"], [255, 0, 0])
+        self.clear_visit_highlight()
+        col, title = visit_style(n)
         segs, _ = edges_for([n], self.vc["colors"])
         self.h_stop_box.points = segs
         self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
@@ -1801,27 +1854,42 @@ class Sim:
             "/stop/fill", tuple(col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
             opacity=self.vc["stop_fill_opacity"], cast_shadow=False, receive_shadow=False)
         self.h_stop_label = self.server.scene.add_label(
-            "/stop/label", stop_title(st),
+            "/stop/label", title,
             position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
             anchor="bottom-center", font_screen_scale=self.vc["stop_label_scale"])
         self.stop_active = st
+        self.visit_active = st
+        self.visit_arrival_gap = self.box_gap(n, self.position())
+        self.h_highlight.visible = False
+        self._sync_visit_labels()
         self.face_target = np.array(n["center"], np.float64)
         self.pose_avatar(self.position(), moving=False)
 
     def blink_stop(self, now: float) -> None:
-        on = int(now * 2 * self.vc["stop_blink_hz"]) % 2 == 0
-        self.h_stop_box.visible = on
+        # Existing playback callbacks use this hook; the health highlight is now steady.
+        self.h_stop_box.visible = self.visit_active is not None
         if self.h_stop_fill is not None:
-            self.h_stop_fill.visible = on
+            self.h_stop_fill.visible = self.visit_active is not None
 
-    def clear_stop_highlight(self) -> None:
+    def clear_visit_highlight(self) -> None:
         self.h_stop_box.points, self.h_stop_box.colors = edges_for([], self.vc["colors"])
         for h in (self.h_stop_fill, self.h_stop_label):
             if h is not None:
                 h.remove()
         self.h_stop_fill = self.h_stop_label = None
+        self.visit_active = None
+        self.visit_arrival_gap = 0.0
+        self._sync_visit_labels()
+
+    def end_stop(self) -> None:
+        """Release briefing/facing state without removing the equipment's health indication."""
         self.stop_active = None
         self.face_target = None
+
+    def clear_stop_highlight(self) -> None:
+        """Explicit reset/replay clears both playback and visual state."""
+        self.end_stop()
+        self.clear_visit_highlight()
 
 
 if __name__ == "__main__":

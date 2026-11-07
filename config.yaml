@@ -222,10 +222,10 @@ viewer:
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
   use_tour: true            # walk out/tour.json (door -> warning assets -> target) if it exists
-  stop_box_thickness: 7.0   # frame around the equipment while the worker stops there (screen px)
-  stop_fill_opacity: 0.25   # translucent fill of the stopped-at equipment
+  stop_box_thickness: 9.0   # vivid, steady health outline on visited equipment (screen px)
+  stop_fill_opacity: 0.22   # saturated fill while preserving the equipment underneath
+  visit_release_margin: 0.25  # hold the health highlight until the worker leaves proximity + this gap
   stop_fill_pad: 0.03       # fill box slightly larger than the object box (units)
-  stop_blink_hz: 1.5        # blink rate while pausing
   stop_label_scale: 1.2     # big status label above the equipment
   display:                  # splat display: groups can be hidden in the viewer ("Scene display" panel)
     show_ceiling: true
