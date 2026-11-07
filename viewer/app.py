@@ -298,17 +298,9 @@ class Sim:
         self.h_rep = sc.add_line_segments("/repaired_boxes", np.concatenate(segs_r) if segs_r else np.zeros((0, 2, 3), np.float32),
                                           np.concatenate(cols_r) if cols_r else np.zeros((0, 2, 3), np.uint8),
                                           thickness=3.0, thickness_units="screen", visible=False)
-        lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
-        p = self.pts + lift
         self.draw_path()
         self.h_tour_markers: list[Any] = []
-        for k, st in enumerate(self.stops, 1):              # numbered tour stop markers on the floor
-            q = p[min(st["sample_index"], len(p) - 1)]
-            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
-            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
-            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
-                                                    position=(q[0], q[1] - 0.12, q[2]),
-                                                    anchor="bottom-center", font_screen_scale=0.8))
+        self.draw_tour_markers()
         t = self.target
         sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
@@ -782,8 +774,10 @@ class Sim:
         print(f"[viewer] http://localhost:{self.vc['port']}  ({len(self.nodes)} objects, "
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
+        self._init_remote()
         while True:
             now = time.time()
+            self.poll_remote(now)
             if self.playing and now < self.pause_until and self.stop_active is not None:
                 self.blink_stop(now)                                   # pausing at a stop
             elif self.playing and self.stop_active is not None and self.stop_active["kind"] != "target":
@@ -851,6 +845,88 @@ class Sim:
                 self.md_goto.content = "⚠️ Click an object in the 3D view first, then press this button."
                 return
             self.go_to(self.selected)
+
+    def draw_tour_markers(self) -> None:
+        """Numbered floor markers for the current tour stops (replaces any previous markers)."""
+        for h in self.h_tour_markers:
+            h.remove()
+        self.h_tour_markers = []
+        p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
+        sc = self.server.scene
+        for k, st in enumerate(self.stops, 1):
+            q = p[min(st["sample_index"], len(p) - 1)]
+            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
+            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
+            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
+                                                    position=(q[0], q[1] - 0.12, q[2]),
+                                                    anchor="bottom-center", font_screen_scale=0.8))
+
+    # --- remote control (MCP server -> out/viewer_cmd.jsonl -> here) ---
+    def _init_remote(self) -> None:
+        self.cmd_path = out_path(self.cfg, "viewer_cmd.jsonl")
+        self.cmd_offset = self.cmd_path.stat().st_size if self.cmd_path.exists() else 0   # ignore old commands
+        self.next_poll = 0.0
+
+    def poll_remote(self, now: float) -> None:
+        """Heartbeat + execute new commands (show / walk / tour) written by copilot.tools."""
+        if now < self.next_poll:
+            return
+        self.next_poll = now + self.vc.get("remote_poll_s", 0.5)
+        out_path(self.cfg, "viewer_heartbeat").write_text(str(now), encoding="utf-8")
+        if not self.cmd_path.exists() or self.cmd_path.stat().st_size <= self.cmd_offset:
+            return
+        with open(self.cmd_path, encoding="utf-8") as f:
+            f.seek(self.cmd_offset)
+            lines = f.read().splitlines()
+            self.cmd_offset = f.tell()
+        for line in lines:
+            try:
+                c = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                res = self.handle_command(c)
+            except Exception as e:  # noqa: BLE001 - a bad command must never stop the viewer
+                res = {"ok": False, "message": f"{type(e).__name__}: {e}"}
+            with open(out_path(self.cfg, "viewer_cmd_results.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"id": c.get("id"), **res}) + "\n")
+
+    def find_node(self, key: str) -> dict | None:
+        k = str(key).strip().upper()
+        for n in self.nodes:
+            a = n.get("asset")
+            if n["id"].upper() == k or (a and k in (a["tag"].upper(), a["asset_id"].upper())):
+                return n
+        return None
+
+    def handle_command(self, c: dict) -> dict:
+        cmd = c.get("cmd")
+        if cmd in ("show", "walk"):
+            n = self.find_node(c.get("target", ""))
+            if n is None:
+                return {"ok": False, "message": f"Unknown asset/object '{c.get('target')}'."}
+            name = n["asset"]["tag"] if n.get("asset") else f"{n['id']} ({n['label']})"
+            if cmd == "show":
+                self.select(n)
+                for client in self.server.get_clients().values():
+                    self.fly_to(n, client)
+                return {"ok": True, "message": f"Showing {name} in the viewer (selected, camera moved)."}
+            self.go_to(n)
+            msg = self.md_goto.content.replace("**", "").replace("⚠️ ", "").replace("🚶 ", "")
+            return {"ok": self.playing, "message": msg}
+        if cmd == "tour":
+            from pipeline.tour import plan_tour
+            t = plan_tour(self.cfg, list(c.get("stops") or []))
+            self.tour, self.tour_route = t, (np.asarray(t["points"], np.float64), t["stops"])
+            self.walk_mode = "goto"                       # force set_walk_mode to rebuild the tour route
+            self.set_walk_mode("tour")
+            self.draw_tour_markers()
+            self.playing = True
+            route = " → ".join(["door"] + [s["tag"] for s in t["stops"]])
+            skipped = "; ".join(f"{s['tag']}: {s['reason']}" for s in t["skipped"]) or "none"
+            return {"ok": True, "message": f"Tour started ({t['mode']}): {route}, "
+                                           f"{t['length'] * self.cfg['scene']['units_to_m']:.1f} m. Skipped: {skipped}"}
+        return {"ok": False, "message": f"Unknown command '{cmd}'."}
 
     def draw_path(self) -> None:
         p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y

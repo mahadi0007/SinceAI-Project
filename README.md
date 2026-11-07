@@ -65,3 +65,18 @@ LLM provider is Featherless (`Qwen/Qwen3.5-397B-A17B`, OpenAI-compatible, `copil
 ledger (`llm_ledger.jsonl`), no automatic retries; `VALMET_OFFLINE=1` uses caches/templates only. Measured results,
 method and limitations: `review/RESULTS.md`. Tests: `python -m pytest -q tests`.
 The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id shifts between segmentation versions are safe.
+
+## MCP server (ask the copilot from Claude Code / Claude Desktop)
+
+`mcp_server.py` exposes the field-service data and actions as MCP tools (thin wrapper over `copilot/tools.py`):
+`search_assets`, `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
+`plan_tour`, `draft_work_order`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
+`walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
+
+- **Claude Code:** `.mcp.json` registers the server as `valmet-copilot`; open Claude Code in this folder and approve it.
+- **Claude Desktop:** add to `claude_desktop_config.json`:
+  `"valmet-copilot": {"command": "<repo>/.venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"]}`
+- Example questions: *"Which pumps need attention?"*, *"Why is P-002 flagged? Cite evidence."*, *"Take me to M-006 in the viewer."*,
+  *"Plan a tour past CV-003 and M-006."*
+- Safety and cost: data tools are read-only, work orders are drafts, no physical control; only
+  `diagnose(allow_paid=true)` can spend a request from the team's paid budget.
