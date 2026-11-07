@@ -5,7 +5,7 @@ Option C (quick): fixed phrases are handled locally without any LLM, e.g.
   "which assets need attention", "status of P-002", "help".
 Option A (Claude): anything else runs `claude -p` (the user's own Claude Code login, e.g. Pro/Max
 subscription) with ONLY our MCP server (.mcp.json, --strict-mcp-config) and only its tools allowed.
-Its viewer tools (show/walk/tour) reach the running viewer through out/viewer_cmd.jsonl.
+Its viewer tools (show/walk/tour/move/turn/remove/restore) reach the running viewer through out/viewer_cmd.jsonl.
 """
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ Cfg = dict[str, Any]
 TAG_RE = re.compile(r"\b(OBJ-\d{4}|ASSET-\d{3}|[A-Z]{1,3}-\d{3})\b", re.I)
 HELP = ("**Quick commands** (instant, free): `take me to M-006` · `show P-005` · `start tour` · "
         "`tour past CV-003 and M-006` · `which assets need attention` · `status of P-002`.  \n"
+        "Edit movable objects (`it` = the selected one): `move OBJ-0269 0.5 m left` · `move it 20 cm up` · "
+        "`turn it 30 degrees right` · `remove OBJ-0269` · `restore it`.  \n"
         "Anything else is answered by **Claude** with the copilot tools (~10-30 s).")
 
 
@@ -59,8 +61,50 @@ def label_target(text: str, labels: list[str] | None) -> tuple[str, str] | None:
     return None
 
 
+EDIT_TARGET_RE = re.compile(r"\b(?:it|this|that)\b")
+STEP_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(cm|mm|m|meters?|metres?)?\s+(?:to the\s+)?"
+                     r"(left|right|forwards?|backwards?|back|up|down)\b")
+STEP_AXIS = {"left": ("right_m", -1), "right": ("right_m", 1), "forward": ("forward_m", 1),
+             "forwards": ("forward_m", 1), "back": ("forward_m", -1), "backward": ("forward_m", -1),
+             "backwards": ("forward_m", -1), "up": ("up_m", 1), "down": ("up_m", -1)}
+UNIT_M = {"cm": 0.01, "mm": 0.001}
+
+
+def parse_edit(text: str) -> dict | None:
+    """'move OBJ-0269 0.5 m left', 'turn it 30 degrees right', 'remove OBJ-0269', 'restore it'.
+    Only for one object id or 'it' (the selection); labels and qualifiers ('the green chair') go to Claude."""
+    tags = tags_in(text)
+    t = TAG_RE.sub(" ", text.strip().lower())                   # digits of the id must not read as amounts
+    if len(tags) > 1 or (not tags and not EDIT_TARGET_RE.search(t)):
+        return None
+    target = tags[0] if tags else ""
+    if re.match(r"\s*(?:remove|delete)\b", t):
+        return {"cmd": "remove", "target": target}
+    if re.match(r"\s*(?:restore|put (?:it |this |that )?back)\b", t):
+        return {"cmd": "restore", "target": target}
+    if re.match(r"\s*(?:turn|rotate|spin)\b", t):
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:°|deg|degrees?)?", t)
+        if not m:
+            return None
+        right = re.search(r"\bright\b", t) or (re.search(r"clockwise", t) and not re.search(r"counter|anti", t))
+        return {"cmd": "turn", "target": target, "degrees": -float(m.group(1)) if right else float(m.group(1))}
+    if re.match(r"\s*(?:move|shift|push|slide|nudge)\b", t):
+        steps = STEP_RE.findall(t)
+        if not steps:
+            return None
+        q = {"cmd": "move", "target": target, "forward_m": 0.0, "right_m": 0.0, "up_m": 0.0}
+        for amount, unit, direction in steps:
+            axis, sign = STEP_AXIS[direction]
+            q[axis] += sign * float(amount) * UNIT_M.get(unit, 1.0)
+        return q
+    return None
+
+
 def parse_quick(text: str, labels: list[str] | None = None) -> dict | None:
     """Recognise a fixed command; None means 'ask Claude'. `labels` = known vision labels in the scene."""
+    edit = parse_edit(text)
+    if edit:
+        return edit
     t = text.strip().lower()
     tags = tags_in(text)
     if not tags:
@@ -83,11 +127,17 @@ def parse_quick(text: str, labels: list[str] | None = None) -> dict | None:
     return None
 
 
-def run_quick(q: dict, act: Callable[[str, str], str]) -> str:
-    """Execute a quick command. `act(cmd, target)` performs viewer actions and returns a message."""
+def run_quick(q: dict, act: Callable[..., str]) -> str:
+    """Execute a quick command. `act(cmd, target, **args)` performs viewer actions and returns a message."""
     from copilot import tools as T
     if q["cmd"] == "help":
         return HELP
+    if q["cmd"] in ("move", "turn", "remove", "restore"):
+        return act(
+            cmd=q["cmd"],
+            target=q["target"],
+            **{k: v for k, v in q.items() if k not in ("cmd", "target")},
+        )
     if q["cmd"] in ("walk", "show"):
         return act(q["cmd"], q["target"])
     if q["cmd"] == "tour":
@@ -185,7 +235,7 @@ def ask_claude(question: str, cc: Cfg) -> str:
     return f"{d.get('result', '').strip()}\n\n_Claude via MCP · {d.get('num_turns')} turns_"
 
 
-def answer(question: str, cc: Cfg, act: Callable[[str, str], str]) -> tuple[str, str]:
+def answer(question: str, cc: Cfg, act: Callable[..., str]) -> tuple[str, str]:
     """Returns (answer markdown, route) where route is 'quick' or 'claude'."""
     from copilot.tools import scene
     labels = sorted({n["label"] for n in scene()["objects"] if n["kind"] == "object"})

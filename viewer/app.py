@@ -22,7 +22,7 @@ from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
 from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
-from viewer.nudge import add_nudge_gui, gizmo_scale, up_vector
+from viewer.nudge import add_nudge_gui, floor_axes, gizmo_scale, up_vector
 
 Cfg = dict[str, Any]
 # Viser renders markdown tables as Mantine tables without borders; this <style> (injected once through an
@@ -1327,16 +1327,7 @@ class Sim:
         @b_remove.on_click
         def _(_e: Any) -> None:
             if self.sel_inst:
-                if self.sel_inst == self.inst[self.sel_inst]["oid"]:
-                    self.inst[self.sel_inst]["removed"] = True
-                    self.inst[self.sel_inst]["h"].visible = False
-                else:                                                   # a copy is deleted for good
-                    self.inst.pop(self.sel_inst)["h"].remove()
-                self.md_edit.content = f"**{self.sel_inst}** removed."
-                self.sel_inst = None
-                self.hide_gizmo()
-                self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
-                self.save_edits()
+                self.remove_selected()
 
         @b_restore.on_click
         def _(_e: Any) -> None:
@@ -1403,6 +1394,75 @@ class Sim:
             self.gizmo.position, self.gizmo.wxyz = h.position, h.wxyz
         self.h_selected.points = self.inst_box(name)
         self.save_edits()
+
+    def remove_selected(self) -> None:
+        if self.sel_inst == self.inst[self.sel_inst]["oid"]:
+            self.inst[self.sel_inst]["removed"] = True
+            self.inst[self.sel_inst]["h"].visible = False
+        else:                                                   # a copy is deleted for good
+            self.inst.pop(self.sel_inst)["h"].remove()
+        self.md_edit.content = f"**{self.sel_inst}** removed."
+        self.sel_inst = None
+        self.hide_gizmo()
+        self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
+        self.save_edits()
+
+    def edit_target(self, key: str) -> tuple[str | None, str]:
+        """Editable instance for a chat / MCP edit: ''/'it' = the selection, else an object id, copy or label
+        (then the movable object with that label closest to the camera)."""
+        k = str(key or "").strip()
+        if k.lower() in ("", "it", "this", "selected", "that"):
+            if self.sel_inst:
+                return self.sel_inst, ""
+            if self.selected is not None and self.selected["id"] in self.movable:   # e.g. just removed
+                return self.selected["id"], ""
+            return None, "Nothing editable is selected; name the object (e.g. OBJ-0269) or click it first."
+        copy = next((x for x in self.inst if x.upper() == k.upper()), None)
+        if copy:
+            return copy, ""
+        n = self.find_node(k)
+        if n is None:
+            from copilot.tools import label_matches
+            cands = [self.node_by_id[o] for o in self.movable if label_matches(self.node_by_id[o]["label"], k)]
+            if not cands:
+                return None, f"No movable object called '{k}'."
+            client = next(iter(self.server.get_clients().values()), None)
+            eye = np.asarray(client.camera.position) if client is not None else self.position()
+            n = min(cands, key=lambda m: float(np.linalg.norm(np.asarray(m["center"]) - eye)))
+        if n["id"] not in self.movable:
+            return None, (f"{n['id']} ({n['label']}) can't be edited: only the {len(self.movable)} objects "
+                          "that cut out cleanly can be moved or removed.")
+        return n["id"], ""
+
+    def edit_command(self, c: dict) -> dict:
+        """move / turn / remove / restore an editable object (chat quick commands and MCP)."""
+        name, why = self.edit_target(c.get("target", ""))
+        if name is None:
+            return {"ok": False, "message": why}
+        cmd, oid = c["cmd"], self.inst[name]["oid"]
+        label = f"{name} ({self.node_by_id[oid]['label']})"
+        if cmd == "restore":
+            self.restore(oid)
+            self.select(self.node_by_id[oid])
+            self.save_edits()
+            return {"ok": True, "message": f"{label} restored to its original place."}
+        if self.inst[name]["removed"]:
+            return {"ok": False, "message": f"{label} is removed; restore it first."}
+        self.select(self.node_by_id[oid], inst=name)
+        if cmd == "remove":
+            self.remove_selected()
+            return {"ok": True, "message": f"{label} removed."}
+        if cmd == "turn":
+            deg = float(c.get("degrees") or 0)
+            self.nudge(np.zeros(3), np.radians(deg))
+            return {"ok": True, "message": f"{label} turned {abs(deg):g}° {'left' if deg >= 0 else 'right'}."}
+        up = up_vector(self.cfg["scene"]["up_direction"])
+        f, r = floor_axes(client=next(iter(self.server.get_clients().values()), None), up=up)
+        d = {k: float(c.get(k) or 0) for k in ("forward_m", "right_m", "up_m")}
+        self.nudge((d["forward_m"] * f + d["right_m"] * r + d["up_m"] * up) / self.cfg["scene"]["units_to_m"], 0.0)
+        names = {"forward_m": ("forward", "back"), "right_m": ("right", "left"), "up_m": ("up", "down")}
+        moved = ", ".join(f"{abs(v):g} m {names[k][v < 0]}" for k, v in d.items() if v) or "nowhere"
+        return {"ok": True, "message": f"{label} moved {moved} (relative to the camera)."}
 
     def hide_gizmo(self) -> None:
         if self.gizmo is not None:
@@ -1709,12 +1769,12 @@ class Sim:
             if q and not self._chat_busy:
                 threading.Thread(target=self.chat, args=(q,), daemon=True).start()
 
-    def chat_act(self, cmd: str, target: str) -> str:
+    def chat_act(self, cmd: str, target: str, **args: Any) -> str:
         """Viewer actions for quick commands (same handlers as the MCP remote commands)."""
         if cmd == "tour":
             res = self.handle_command({"cmd": "tour", "stops": [t for t in target.split(",") if t]})
         else:
-            res = self.handle_command({"cmd": cmd, "target": target})
+            res = self.handle_command({"cmd": cmd, "target": target, **args})
         return ("" if res.get("ok") else "⚠️ ") + res.get("message", "")
 
     def chat(self, question: str) -> None:
@@ -1765,7 +1825,7 @@ class Sim:
         self.next_poll = 0.0
 
     def poll_remote(self, now: float) -> None:
-        """Heartbeat + execute new commands (show / walk / tour) written by copilot.tools."""
+        """Heartbeat + execute new commands (show / walk / tour / move / turn / remove / restore) from copilot.tools."""
         if now < self.next_poll:
             return
         self.next_poll = now + self.vc.get("remote_poll_s", 0.5)
@@ -1851,6 +1911,8 @@ class Sim:
             skipped = "; ".join(f"{s['tag']}: {s['reason']}" for s in t["skipped"]) or "none"
             return {"ok": True, "message": f"Tour started ({t['mode']}): {route}, "
                                            f"{t['length'] * self.cfg['scene']['units_to_m']:.1f} m. Skipped: {skipped}"}
+        if cmd in ("move", "turn", "remove", "restore"):
+            return self.edit_command(c)
         return {"ok": False, "message": f"Unknown command '{cmd}'."}
 
     def draw_path(self) -> None:
