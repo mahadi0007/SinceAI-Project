@@ -403,6 +403,7 @@ class Sim:
         self.sl_speed = g.add_slider("Speed (u/s)", 0.1, 2.0, 0.1, self.vc["walk_speed"])
         self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
         self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
+        self._build_walk_mode_gui(g)
         self.cb_boxes = g.add_checkbox("Show all frames", True)
         dc = self.vc["display"]
         with g.add_folder("Scene display", expand_by_default=False):
@@ -485,35 +486,6 @@ class Sim:
             b_fly = g.add_button("Fly to object", visible=True)
             self.b_identify = g.add_button("Ask vision model what this is (paid)")
             self.md_identify = g.add_markdown("")
-        with g.add_folder("Walk mode"):
-            self.dd_walk = g.add_dropdown("Mode", ["Inspection tour", "Go to equipment"],
-                                          initial_value="Inspection tour")
-            goto_opts = [f"{n['asset']['tag']} · {n['label']} · {n['asset']['condition_state']}"
-                         for n in sorted((n for n in self.nodes if n["asset"]), key=lambda n: n["asset"]["tag"])]
-            self.dd_goto = g.add_dropdown("Equipment", goto_opts, initial_value=goto_opts[0], visible=False)
-            b_goto_tag = g.add_button("Walk to selected equipment", visible=False)
-            b_goto_click = g.add_button("Walk to clicked object", visible=False)
-            self.md_goto = g.add_markdown("", visible=False)
-        self.goto_widgets = (self.dd_goto, b_goto_tag, b_goto_click, self.md_goto)
-
-        @self.dd_walk.on_update
-        def _(_e: Any) -> None:
-            mode = "goto" if self.dd_walk.value == "Go to equipment" else "tour"
-            if mode != self.walk_mode:                      # ignore echoes of programmatic changes
-                self.set_walk_mode(mode)
-
-        @b_goto_tag.on_click
-        def _(_e: Any) -> None:
-            tag = self.dd_goto.value.split(" · ")[0]
-            self.go_to(next(n for n in self.nodes if n["asset"] and n["asset"]["tag"] == tag))
-
-        @b_goto_click.on_click
-        def _(_e: Any) -> None:
-            if self.selected is None:
-                self.md_goto.content = "⚠️ Click an object in the 3D view first, then press this button."
-                return
-            self.go_to(self.selected)
-
         with g.add_folder("Inspection tour"):
             if self.tour:
                 route = " → ".join(["door"] + [s["tag"] for s in self.stops])
@@ -831,6 +803,42 @@ class Sim:
             self.pause_until = time.time() + float(self.tour["pause_s"])
 
     # --- routes: inspection tour vs. go to one equipment ---
+    def _build_walk_mode_gui(self, g: Any) -> None:
+        """Two clear mode buttons near the top: Inspection tour | Go to equipment."""
+        with g.add_folder("Walk mode"):
+            self.md_mode = g.add_markdown("**Mode: Inspection tour** (door → warning assets → faulty P-002)")
+            b_tour = g.add_button("Inspection tour", color="blue")
+            b_goto = g.add_button("Go to equipment", color="teal")
+            goto_opts = [f"{n['asset']['tag']} · {n['label']} · {n['asset']['condition_state']}"
+                         for n in sorted((n for n in self.nodes if n["asset"]), key=lambda n: n["asset"]["tag"])]
+            self.dd_goto = g.add_dropdown("Equipment", goto_opts, initial_value=goto_opts[0], visible=False)
+            b_goto_tag = g.add_button("Walk to selected equipment", visible=False)
+            b_goto_click = g.add_button("Walk to clicked object", visible=False)
+            self.md_goto = g.add_markdown("", visible=False)
+        self.goto_widgets = (self.dd_goto, b_goto_tag, b_goto_click, self.md_goto)
+
+        @b_tour.on_click
+        def _(_e: Any) -> None:
+            if self.walk_mode != "tour":
+                self.set_walk_mode("tour")
+
+        @b_goto.on_click
+        def _(_e: Any) -> None:
+            if self.walk_mode != "goto":
+                self.set_walk_mode("goto")
+
+        @b_goto_tag.on_click
+        def _(_e: Any) -> None:
+            tag = self.dd_goto.value.split(" · ")[0]
+            self.go_to(next(n for n in self.nodes if n["asset"] and n["asset"]["tag"] == tag))
+
+        @b_goto_click.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                self.md_goto.content = "⚠️ Click an object in the 3D view first, then press this button."
+                return
+            self.go_to(self.selected)
+
     def draw_path(self) -> None:
         p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
         self.h_path = self.server.scene.add_line_segments(
@@ -858,6 +866,8 @@ class Sim:
             h.visible = mode == "tour"
         for w in self.goto_widgets:
             w.visible = mode == "goto"
+        self.md_mode.content = ("**Mode: Inspection tour** (door → warning assets → faulty P-002)" if mode == "tour"
+                                else "**Mode: Go to equipment** (one asset, from where the worker stands)")
         if mode == "tour":
             self.set_route(*self.tour_route)
             self.md_stop.content = "_Press Play to start the tour._"
@@ -871,7 +881,6 @@ class Sim:
         """Plan from the worker's current position to one object and start walking (Go to mode)."""
         if self.walk_mode != "goto":
             self.set_walk_mode("goto")
-            self.dd_walk.value = "Go to equipment"           # callback sees the mode already set: no-op
         if self.planner is None:
             from pipeline.tour import WalkPlanner
             self.planner = WalkPlanner(self.cfg)
