@@ -22,12 +22,13 @@ from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
 from pipeline.bim_provenance import ArtifactMismatch, compare, scene_revision
 from pipeline.common import ROOT, load_config, out_path, repo_path
-from pipeline.load_splat import covariances, load_splat
+from pipeline.load_splat import covariances, load_splat, open_ply, read_rows, sh_rgb
 from viewer.nudge import add_nudge_gui, gizmo_scale, up_vector
 from viewer import scene_edits as se
 from viewer import ui
 
 Cfg = dict[str, Any]
+INSPECT_STAGE = np.array([2000.0, 0.0, 0.0])   # "Open in 3D" stage: beyond the camera's far plane (1000) from the room
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
 
@@ -296,6 +297,14 @@ class Sim:
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.revision = scene_revision(cfg, self.pick_lab)     # every derived artifact must match this
         self.selected: dict | None = None
+        self.info_node: dict | None = None           # what the Info tab shows (equipment or plain object)
+        self.inspected: dict | None = None           # object opened in 3D
+        self.inspect_cams: dict[int, tuple] = {}     # cameras of the browsers that opened it, restored on close
+        self.h_inspect: list[Any] = []
+        self.b_open3d: list[Any] = []                # "Open in 3D" buttons (clicked object, Info)
+        self._seg_tree: Any = None                   # labelled segment points, for an object's own Gaussians
+        self._ply: tuple | None = None               # unfiltered scan rows + all their positions ("Open in 3D")
+        self._inspect: dict | None = None            # opened object's SH colour, viewing browser and last eye
         self.node_by_id = {n["id"]: n for n in self.nodes}
         self.obj_index = {o["id"]: k for k, o in enumerate(self.sg["objects"])}
         self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
@@ -739,11 +748,16 @@ class Sim:
             self.b_identify = g.add_button("Ask the AI to know this", color="gray", icon="sparkles",
                                            hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
+            b_open_sel = g.add_button("Open in 3D", icon="cube",
+                                      hint="Show this object alone: drag to turn it, scroll to zoom.")
             b_close = g.add_button("Close", color="gray", icon="x")
         self.h_hero = g.add_html("")                          # status card of the selected equipment/object
         self.h_audio = g.add_html("", visible=False)          # spoken briefing player
         self.b_ask = g.add_button("Ask the copilot", color="gray", icon="message-chatbot",
                                   hint="Ask the copilot anything about this equipment (1 live AI request).")
+        b_open_info = g.add_button("Open in 3D", icon="cube",
+                                   hint="Show this object alone: drag to turn it, scroll to zoom.")
+        self.b_open3d += [b_open_sel, b_open_info]
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="teal")
         self.md_copilot = g.add_markdown("")
@@ -769,6 +783,14 @@ class Sim:
         @self.b_ask.on_click
         def _(e: Any) -> None:
             self.open_question_dialog(e.client)
+
+        @b_open_sel.on_click
+        def _(e: Any) -> None:
+            self.toggle_3d(self.selected, e.client)
+
+        @b_open_info.on_click
+        def _(e: Any) -> None:
+            self.toggle_3d(self.info_node, e.client)
 
         @b_close.on_click
         def _(_e: Any) -> None:
@@ -853,6 +875,7 @@ class Sim:
         Then the copilot reads its summary aloud (ElevenLabs; cached per text, so repeats are free)."""
         n = self.selected_equipment()
         tag = n["asset"]["tag"]
+        self.info_node = n
         self.h_hero.content = ui.asset_hero(n["asset"], self.excel_sources(tag))
         if self.arrived and n is self.target:                 # the tour's spoken briefing owns the panel
             self.mark_selected(n)
@@ -909,6 +932,7 @@ class Sim:
     def show_object(self, n: dict) -> None:
         """All we know about a scene object without an Excel record: label, size, scan points, crop image."""
         self._load_token += 1                                  # cancels a pending equipment load
+        self.info_node = n
         self.set_audio(None)
         self.set_object_view(True)
         self.h_hero.content = ""                               # the Clicked object card above shows it
@@ -1657,6 +1681,104 @@ class Sim:
         if n["asset"]:                                               # clicked equipment -> Info tab
             self.choose_equipment(n["asset"]["tag"])
 
+    # --- open in 3D: the object alone on a distant stage; the browser that opened it orbits / zooms around it ---
+    def object_splat(self, n: dict) -> dict[str, np.ndarray]:
+        """The object's Gaussians in full scan quality, relative to its box centre: no opacity / size filter and
+        each Gaussian's own size added to the reach (as viewer.splat_owner), so faint detail and edges stay.
+        A Gaussian belongs to the object when its nearest segmented point within that reach does."""
+        oid = n.get("copy_of", n["id"])
+        members = self.movable[oid]["members"] if oid in self.movable else [oid]
+        if self._seg_tree is None:
+            on = self.pick_lab >= 0
+            self._seg_tree, self._seg_lab = cKDTree(self.pick_xyz[on]), self.pick_lab[on]
+        if self._ply is None:
+            raw, col = open_ply(str(repo_path(self.cfg["paths"]["ply"])))
+            with np.errstate(all="ignore"):
+                xyz = np.asarray(raw[:, [col["x"], col["y"], col["z"]]], np.float32)
+            self._ply = (raw, col, xyz)
+        raw, col, xyz = self._ply
+        src = self.node_by_id[oid]
+        lo = np.min([self.node_by_id[m]["bbox_min"] for m in members], 0)
+        hi = np.max([self.node_by_id[m]["bbox_max"] for m in members], 0)
+        oc = self.vc["splat_owner"]
+        base, cap = self.cfg["label"]["member_dist"], oc["max_size"]
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.all((xyz >= lo - base - cap) & (xyz <= hi + base + cap), axis=1))
+        g = read_rows(raw, col, cand)
+        reach = base + np.minimum(g["scales"].max(1), cap)
+        dist, j = self._seg_tree.query(g["xyz"], distance_upper_bound=base + cap, workers=-1)
+        lab = self._seg_lab[np.minimum(j, len(self._seg_lab) - 1)]
+        own = ((dist <= reach) & np.isin(lab, [self.obj_index[m] for m in members])
+               & (g["scales"].max(1) < 0.5 * np.linalg.norm(hi - lo)))      # no background blobs larger than it
+        g = {k: v[own] for k, v in g.items()}
+        return {"xyz": g["xyz"] - np.array(src["center"], np.float32), "rgb": g["rgb"], "op": g["opacity"][:, None],
+                "cov": covariances(g["scales"], g["quats_wxyz"]).astype(np.float32),
+                "f_dc": g["f_dc"], "sh_rest": g["sh_rest"]}
+
+    def toggle_3d(self, n: dict | None, client: Any) -> None:
+        if self.inspected is not None:
+            self.close_3d()
+        elif n is not None:
+            self.open_3d(n, client)
+
+    def open_3d(self, n: dict, client: Any) -> None:
+        g = self.object_splat(n)
+        if not len(g["xyz"]):
+            self.md_copilot.content = f"⚠️ No scan points found for {n['id']}."
+            return
+        sc = self.server.scene
+        self.h_inspect = [sc.add_frame("/inspect", position=tuple(INSPECT_STAGE), show_axes=False)]
+        if self.vc["render_splats"]:
+            self.h_inspect.append(sc.add_gaussian_splats("/inspect/splat", centers=g["xyz"], rgbs=g["rgb"],
+                                                         opacities=g["op"], covariances=g["cov"]))
+        else:
+            self.h_inspect.append(sc.add_point_cloud("/inspect/splat", g["xyz"], (g["rgb"] * 255).astype(np.uint8),
+                                                     point_size=self.vc["point_size"]))
+        self.inspected = n
+        self.inspect_cams[client.client_id] = (client.camera.position, client.camera.look_at, client.camera.fov)
+        r = max(0.05, 0.5 * float(np.linalg.norm(np.percentile(g["xyz"], 98, 0) - np.percentile(g["xyz"], 2, 0))))
+        view = np.array([0.5, -0.4, 1.0])                         # front (+z), a bit to the side and above (-y)
+        dist = 1.2 * r / np.sin(client.camera.fov / 2)
+        with client.atomic():
+            client.camera.position = tuple(INSPECT_STAGE + dist * view / np.linalg.norm(view))
+            client.camera.look_at = tuple(INSPECT_STAGE)                # after position (which shifts look_at)
+        self._inspect = {"client": client.client_id, "g": g, "eye": None, "t": -1.0}
+        self.update_inspect_colors()
+        for b in self.b_open3d:
+            b.label, b.icon = "Back to the room", "arrow-back-up"
+
+    def close_3d(self) -> None:
+        for h in reversed(self.h_inspect):
+            h.remove()
+        self.h_inspect, self.inspected, self._inspect = [], None, None
+        clients = self.server.get_clients()
+        for cid, (pos, look, fov) in self.inspect_cams.items():
+            if cid in clients:
+                c = clients[cid]
+                with c.atomic():
+                    c.camera.position, c.camera.look_at, c.camera.fov = pos, look, fov
+        self.inspect_cams = {}
+        for b in self.b_open3d:
+            b.label, b.icon = "Open in 3D", "cube"
+
+    def update_inspect_colors(self, now: float = 0.0) -> None:
+        """View-dependent colour of the opened object (the scan's SH; viser renders base colour only), baked for
+        the browser that opened it whenever its eye moved noticeably, at most 10 times a second."""
+        ins = self._inspect
+        client = self.server.get_clients().get(ins["client"]) if ins else None
+        if client is None or now - ins["t"] < 0.1:
+            return
+        eye = np.asarray(client.camera.position, np.float64) - INSPECT_STAGE
+        if ins["eye"] is not None and np.linalg.norm(eye - ins["eye"]) < 0.01 * np.linalg.norm(eye):
+            return
+        ins["eye"], ins["t"] = eye, now
+        g = ins["g"]
+        rgb = sh_rgb(g["f_dc"], g["sh_rest"], g["xyz"] - eye)
+        if self.vc["render_splats"]:
+            self.h_inspect[1].rgbs = rgb
+        else:
+            self.h_inspect[1].colors = (rgb * 255).astype(np.uint8)
+
     # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
     # One rigid transform per instance (frame /movable/<name>) carries its splat piece, BIM mesh, box, label and
     # pick points; the layout lives in out/scene_edits.json (viewer/scene_edits.py), never in scene.ifc.
@@ -2147,6 +2269,8 @@ class Sim:
             return
         for c in clients:
             saved = self._saved_cams.get(c.client_id)
+            if c.client_id in self.inspect_cams:
+                continue
             with c.atomic():
                 if saved:
                     c.camera.position, c.camera.look_at, c.camera.fov = saved
@@ -2252,6 +2376,8 @@ class Sim:
         self._pov_look = look
         fov = float(np.radians(pc["fov_deg"]))
         for c in self.server.get_clients().values():
+            if c.client_id in self.inspect_cams:                     # looking at an object opened in 3D
+                continue
             with c.atomic():
                 c.camera.up_direction = tuple(up)
                 c.camera.fov = fov
@@ -2390,6 +2516,7 @@ class Sim:
                 else:
                     self.rig.idle(now)
                 last_dist = self.dist
+            self.update_inspect_colors(now)
             if self._reset_pending:                                    # a browser (re)connected
                 self._reset_pending = False
                 try:

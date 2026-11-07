@@ -87,6 +87,58 @@ def load_splat(path: str, min_opacity: float = 0.1, max_scale: float = 0.3,
     }
 
 
+def open_ply(path: str) -> tuple[np.memmap, dict[str, int]]:
+    """Raw rows (valid prefix only, memory-mapped) and column index by property name."""
+    offset, n, names = _read_header(path)
+    raw = np.memmap(path, dtype=np.float32, mode="r", offset=offset, shape=(n, len(names)))
+    col = {k: i for i, k in enumerate(names)}
+    with np.errstate(all="ignore"):
+        cut = _valid_prefix(np.asarray(raw[:, [col["x"], col["y"], col["z"]]], np.float64))
+    return raw[:cut], col
+
+
+def read_rows(raw: np.memmap, col: dict[str, int], rows: np.ndarray) -> dict:
+    """Unfiltered Gaussians of these PLY rows, including the higher-order SH colour (sh_rest: N x 3 x K)."""
+    r = np.asarray(raw[np.sort(rows)], np.float64)
+    def get(*keys: str) -> np.ndarray:
+        return r[:, [col[k] for k in keys]]
+    q = get("rot_0", "rot_1", "rot_2", "rot_3")
+    q /= np.linalg.norm(q, axis=1, keepdims=True) + 1e-12
+    rest = sorted((k for k in col if k.startswith("f_rest_")), key=lambda k: int(k[7:]))
+    return {
+        "xyz": get("x", "y", "z").astype(np.float32),
+        "rgb": np.clip(0.5 + SH_C0 * get("f_dc_0", "f_dc_1", "f_dc_2"), 0, 1).astype(np.float32),
+        "f_dc": get("f_dc_0", "f_dc_1", "f_dc_2").astype(np.float32),
+        "opacity": (1.0 / (1.0 + np.exp(-np.clip(get("opacity")[:, 0], -30, 30)))).astype(np.float32),
+        "scales": np.exp(np.clip(get("scale_0", "scale_1", "scale_2"), -20, 5)).astype(np.float32),
+        "quats_wxyz": q.astype(np.float32),
+        "sh_rest": get(*rest).reshape(len(r), 3, -1).astype(np.float32),   # file order: all R, all G, all B
+        "row_ids": np.sort(rows),
+    }
+
+
+SH_C1 = 0.4886025119029199
+SH_C2 = (1.0925484305920792, -1.0925484305920792, 0.31539156525252005, -1.0925484305920792, 0.5462742152960396)
+SH_C3 = (-0.5900435899266435, 2.890611442640554, -0.4570457994644658, 0.3731763325901154, -0.4570457994644658,
+         1.445305721320277, -0.5900435899266435)
+
+
+def sh_rgb(f_dc: np.ndarray, sh_rest: np.ndarray, dirs: np.ndarray) -> np.ndarray:
+    """View-dependent colour (3DGS convention, up to degree 3); dirs = Gaussian - camera, any length."""
+    d = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
+    x, y, z = d[:, 0:1], d[:, 1:2], d[:, 2:3]
+    xx, yy, zz = x * x, y * y, z * z
+    basis = [-SH_C1 * y, SH_C1 * z, -SH_C1 * x,
+             SH_C2[0] * x * y, SH_C2[1] * y * z, SH_C2[2] * (2 * zz - xx - yy), SH_C2[3] * x * z,
+             SH_C2[4] * (xx - yy),
+             SH_C3[0] * y * (3 * xx - yy), SH_C3[1] * x * y * z, SH_C3[2] * y * (4 * zz - xx - yy),
+             SH_C3[3] * z * (2 * zz - 3 * xx - 3 * yy), SH_C3[4] * x * (4 * zz - xx - yy), SH_C3[5] * z * (xx - yy),
+             SH_C3[6] * x * (xx - 3 * yy)]
+    k = sh_rest.shape[2]
+    b = np.concatenate(basis[:k], axis=1)                                 # N x K
+    return np.clip(0.5 + SH_C0 * f_dc + np.einsum("nck,nk->nc", sh_rest, b), 0, 1).astype(np.float32)
+
+
 def covariances(scales: np.ndarray, quats_wxyz: np.ndarray) -> np.ndarray:
     """(N,3,3) covariance matrices, e.g. for viser add_gaussian_splats."""
     w, x, y, z = quats_wxyz.T
