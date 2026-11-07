@@ -94,7 +94,7 @@ def inflate(obstacles: np.ndarray, radius: float, cell: float) -> tuple[np.ndarr
 
 
 def largest_component(mask: np.ndarray) -> np.ndarray:
-    lab, n = ndimage.label(mask, structure=np.ones((3, 3)))
+    lab, n = ndimage.label(mask)  # 4-connected, matching no-corner-cutting moves
     if n == 0:
         return mask
     sizes = ndimage.sum(mask, lab, range(1, n + 1))
@@ -159,30 +159,28 @@ def astar(walk: np.ndarray, start: Cell, goal: Cell) -> list[Cell]:
     raise RuntimeError(f"A*: no path from {start} to {goal}")
 
 
-def bresenham(a: Cell, b: Cell) -> list[Cell]:
-    (x0, y0), (x1, y1) = a, b
-    dx, dy = abs(x1 - x0), -abs(y1 - y0)
-    sx, sy = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1)
-    err, out = dx + dy, []
-    while True:
-        out.append((x0, y0))
-        if (x0, y0) == (x1, y1):
-            return out
-        e2 = 2 * err
-        if e2 >= dy:
-            err += dy; x0 += sx
-        if e2 <= dx:
-            err += dx; y0 += sy
-
-
-def line_free(walk: np.ndarray, a: Cell, b: Cell, per_cell: int = 4) -> bool:
-    """Every cell the straight segment between cell centres touches is walkable (dense sampling,
-    so lines that only clip a cell corner are caught too)."""
-    n = max(abs(b[0] - a[0]), abs(b[1] - a[1])) * per_cell + 1
-    t = np.linspace(0.0, 1.0, n)
-    xs = np.floor(a[0] + 0.5 + t * (b[0] - a[0])).astype(int)
-    zs = np.floor(a[1] + 0.5 + t * (b[1] - a[1])).astype(int)
-    return bool(walk[xs, zs].all()) and all(walk[c] for c in bresenham(a, b))
+def line_free(walk: np.ndarray, a: Cell, b: Cell) -> bool:
+    """Exact supercover: every cell the segment between cell centres touches is walkable;
+    passing exactly through a cell corner needs both side cells walkable (as A* requires)."""
+    nx, nz = abs(b[0] - a[0]), abs(b[1] - a[1])
+    sx, sz = (b[0] > a[0]) - (b[0] < a[0]), (b[1] > a[1]) - (b[1] < a[1])
+    x, z = a
+    ix = iz = 0
+    if not walk[x, z]:
+        return False
+    while ix < nx or iz < nz:
+        d = (2 * ix + 1) * nz - (2 * iz + 1) * nx    # next x-crossing vs next z-crossing
+        if d == 0:
+            if not (walk[x + sx, z] and walk[x, z + sz]):
+                return False
+            x, z, ix, iz = x + sx, z + sz, ix + 1, iz + 1
+        elif d < 0:
+            x, ix = x + sx, ix + 1
+        else:
+            z, iz = z + sz, iz + 1
+        if not walk[x, z]:
+            return False
+    return True
 
 
 def shortcut(walk: np.ndarray, path: list[Cell]) -> list[Cell]:

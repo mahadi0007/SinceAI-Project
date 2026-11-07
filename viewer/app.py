@@ -39,7 +39,13 @@ def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
     if cfg["viewer"].get("use_tour", True) and tp.exists():
         with open(tp, encoding="utf-8") as f:
             tour = json.load(f)
-        path = {**path, "points": tour["points"]}
+        ids = {n["id"] for n in sg["objects"] if n["kind"] == "object"}
+        if tour["stops"][-1]["object_id"] != path["target_object"] or any(
+                st["object_id"] not in ids for st in tour["stops"]):
+            print("[viewer] out/tour.json is stale (target/objects changed); re-run pipeline.tour. Ignoring it.")
+            tour = None
+        else:
+            path = {**path, "points": tour["points"]}
     return sg, path, tour
 
 
@@ -192,7 +198,7 @@ class Sim:
         self.stops = self.tour["stops"] if self.tour else []
         self.stop_s = [float(self.s[min(st["sample_index"], len(self.s) - 1)]) for st in self.stops]
         self.next_stop = 0
-        self.pause_until = 0.0
+        self.pause_until = self.pause_left = 0.0
         self.face_target: np.ndarray | None = None   # avatar faces this point while stopped
         self.stop_active: dict | None = None         # tour stop currently highlighted
         self.walk_mode = "tour"                      # "tour" (ends at faulty target) | "goto" (one equipment)
@@ -535,10 +541,16 @@ class Sim:
         @b_play.on_click
         def _(_e: Any) -> None:
             if self.dist >= self.s[-1]:
-                self.dist = 0.0
+                self.dist, self.next_stop = 0.0, 0
+                self.clear_stop_highlight()
             self.playing = not self.playing
-            if self.playing:
+            now = time.time()
+            if self.playing:                    # resume the stop pause where it was frozen
+                self.pause_until = now + self.pause_left if self.stop_active is not None else 0.0
                 self.prefetch_diagnosis()
+            else:
+                self.pause_left = max(0.0, self.pause_until - now)
+                self.blink_stop(0.0)            # freeze the stop highlight in its visible state
 
         @self.b_ask.on_click
         def _(_e: Any) -> None:
@@ -560,6 +572,7 @@ class Sim:
             if not self.playing:
                 self.dist = float(self.sl_pos.value)
                 self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
+                self.pause_until = self.pause_left = 0.0
                 self.clear_stop_highlight()
                 self.update()
 
