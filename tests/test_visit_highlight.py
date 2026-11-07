@@ -34,7 +34,7 @@ def sim():
     s.visit_active = None
     s.visit_arrival_gap = 0.0
     s.h_stop_fill = s.h_stop_label = None
-    s.h_stop_box = Handle(visible=False, wireframe=True)
+    s.h_stop_box = Handle(visible=False)
     s.h_highlight = Handle(visible=True)
     s.h_selected = Handle(visible=True)
     s.h_all_labels = [Handle(visible=True), Handle(visible=True)]
@@ -43,7 +43,7 @@ def sim():
     s.dd_labels = SimpleNamespace(value='Equipment')
     s.sl_radius = SimpleNamespace(value=1.0)
     s.vc = dict(colors={'healthy': [100, 100, 100], 'watch': [100, 100, 100]},
-                stop_outline_pad=.01, stop_outline_opacity=.35, stop_label_scale=1.2,
+                stop_outline_pad=.01, stop_box_thickness=6., visit_tint_strength=.1, stop_label_scale=1.2,
                 selected_color=[255, 0, 255],
                 visit_release_margin=.25)
     s.server = SimpleNamespace(scene=Scene())
@@ -69,7 +69,7 @@ def test_highlight_is_steady_after_pause_expires_and_while_walking_away(sim):
     sim.highlight_stop(dict(object_id='A', kind='stop'))
     outline = sim.h_stop_box
     assert sim.h_stop_fill is None  # No filled surface may obscure the splats.
-    assert outline.wireframe and outline.opacity == .35
+    np.testing.assert_array_equal(outline.colors[0, 0], [0, 255, 40])
     sim.end_stop()
     assert sim.stop_active is None  # tour briefing state is released independently
     for now in (0.0, .5, 100000.0):
@@ -99,7 +99,7 @@ def test_next_visit_recolors_outline_and_suppresses_duplicate_label(sim):
     assert not sim.h_all_labels[0].visible and not sim.h_selected.visible
     sim.highlight_stop(dict(object_id='B', kind='goto'))
     assert old_label.removed and sim.h_stop_fill is None
-    assert outline.color == (255, 0, 20) and outline.opacity == .35
+    np.testing.assert_array_equal(outline.colors[0, 0], [255, 0, 20])
     assert sim.h_all_labels[0].visible and not sim.h_all_labels[1].visible
     assert sim.h_selected.visible and sim.stop_active['object_id'] == 'B'
 
@@ -148,6 +148,48 @@ def test_click_selection_does_not_add_a_solid_box(sim, monkeypatch):
 def test_health_outline_matches_object_bounds_without_a_surface(sim, monkeypatch):
     monkeypatch.setattr(sim.server.scene, 'add_box', lambda *a, **kw: pytest.fail('solid health box'))
     sim.highlight_stop(dict(object_id='A', kind='goto'))
-    np.testing.assert_allclose(sim.h_stop_box.dimensions, [.42, .52, .42])
-    np.testing.assert_allclose(sim.h_stop_box.position, [0, .25, 0])
+    points = sim.h_stop_box.points.reshape(-1, 3)
+    np.testing.assert_allclose(points.max(0) - points.min(0), [.42, .52, .42])
+    np.testing.assert_allclose((points.max(0) + points.min(0)) / 2, [0, .25, 0])
     assert sim.h_stop_fill is None and sim.h_stop_box.visible
+
+
+@pytest.mark.parametrize('state,pale', [('healthy', [185, 255, 200]), ('degraded', [255, 190, 190])])
+def test_pale_tint_preserves_original_detail_and_restores_on_departure(sim, state, pale):
+    sim.nodes[0]['asset']['condition_state'] = state
+    original = np.array([[.2, .3, .4], [.8, .7, .6], [.1, .1, .1]], np.float32)
+    sim.sp = {'rgb': original.copy()}
+    sim._splat_group_rows = {'room': np.arange(3)}
+    sim._splat_object_labels = np.array([0, 0, 1])
+    sim.sg = {'objects': sim.nodes}
+    sim.h_splat = {'room': Handle(rgbs=original.copy())}
+    sim.vc['render_splats'] = True
+    sim._set_visit_tint(sim.nodes[0])
+    rgb = sim.h_splat['room'].rgbs
+    np.testing.assert_allclose(rgb[:2], .9 * original[:2] + .1 * np.array(pale) / 255, atol=1e-7)
+    np.testing.assert_array_equal(rgb[2], original[2])
+    np.testing.assert_array_equal(sim.sp['rgb'], original)
+    sim._set_visit_tint(None)
+    np.testing.assert_array_equal(sim.h_splat['room'].rgbs, original)
+
+
+def test_tint_survives_filter_rebuild_and_does_not_tint_copies(sim):
+    original = np.full((3, 3), .4, np.float32)
+    sim.sp = {'rgb': original.copy()}
+    sim._splat_group_rows = {'room': np.array([0, 2])}
+    sim._splat_object_labels = np.array([0, 0, 1])
+    sim.sg = {'objects': sim.nodes}
+    sim.h_splat = {'room': Handle(rgbs=original[[0, 2]].copy())}
+    sim.vc['render_splats'] = True
+    sim.movable = {'A': {'rgb': original[:2].copy()}}
+    sim.inst = {'A': {'oid': 'A', 'h': Handle(rgbs=original[:2].copy())},
+                'A_copy1': {'oid': 'A', 'h': Handle(rgbs=original[:2].copy())}}
+    sim._set_visit_tint(sim.nodes[0])
+    assert not np.array_equal(sim.inst['A']['h'].rgbs, original[:2])
+    np.testing.assert_array_equal(sim.inst['A_copy1']['h'].rgbs, original[:2])
+    sim.h_splat['room'].rgbs = original[[0, 2]].copy()
+    sim._refresh_visit_tint()
+    assert not np.array_equal(sim.h_splat['room'].rgbs[0], original[0])
+    np.testing.assert_array_equal(sim.h_splat['room'].rgbs[1], original[2])
+    sim._set_visit_tint(None)
+    np.testing.assert_array_equal(sim.inst['A']['h'].rgbs, original[:2])

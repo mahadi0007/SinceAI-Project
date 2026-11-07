@@ -222,7 +222,8 @@ viewer:
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
   use_tour: true            # walk out/tour.json (door -> warning assets -> target) if it exists
-  stop_outline_opacity: 0.35  # 65% transparent, thin wireframe; no filled faces obscure the equipment
+  stop_box_thickness: 6.0     # fully opaque, strong red/green outline (screen pixels)
+  visit_tint_strength: 0.10   # pale red/green filter: 10% tint, 90% original equipment color
   stop_outline_pad: 0.01      # small gap around equipment, in scene units
   visit_release_margin: 0.25  # hold the health highlight until the worker leaves proximity + this gap
   stop_label_scale: 1.2     # big status label above the equipment
