@@ -125,8 +125,29 @@ def stop_record(n: dict, sample_index: int, kind: str) -> dict:
             "center": n["center"], "sample_index": sample_index}
 
 
+def manual_candidates(sg: dict, stops: list[str], target_id: str) -> tuple[list[dict], list[dict]]:
+    """Resolve a manual tag list (kept in the given order). Unknown, duplicate or target tags are
+    reported in `skipped` instead of failing."""
+    by_tag = {n["asset"]["tag"].upper(): n for n in sg["objects"] if n["asset"]}
+    cands, skipped, seen = [], [], set()
+    for raw in stops:
+        tag = str(raw).strip().upper()
+        n = by_tag.get(tag)
+        if n is None:
+            skipped.append({"tag": tag, "reason": "unknown tag (not an Excel asset mapped in the scene)"})
+        elif n["id"] == target_id:
+            skipped.append({"tag": tag, "reason": "the tour always ends at this faulty target"})
+        elif tag in seen:
+            skipped.append({"tag": tag, "reason": "listed twice"})
+        else:
+            seen.add(tag)
+            cands.append(n)
+    return cands, skipped
+
+
 def plan_tour(cfg: Cfg, stops: list[str] | None = None) -> dict:
-    """Plan the tour. stops=None -> automatic from Excel status; otherwise these tags in this order."""
+    """Plan the tour. stops=None -> config tour.stops; empty -> automatic from Excel status;
+    otherwise these tags in this order (manual). The tour always ends at the faulty target."""
     tc, floor_y = cfg["tour"], cfg["scene"]["floor_y"]
     grid, layers, path, sg = load_inputs(cfg)
     walk = layers["walkable"]
@@ -136,15 +157,16 @@ def plan_tour(cfg: Cfg, stops: list[str] | None = None) -> dict:
     by_id = {n["id"]: n for n in sg["objects"]}
     target = by_id[path["target_object"]]
 
-    mode = "auto_excel" if stops is None else "manual"
     if stops is None:
-        cands = candidate_stops(sg, target["id"], tc)
+        stops = list(tc.get("stops") or [])
+    mode = "manual" if stops else "auto_excel"
+    if mode == "auto_excel":
+        cands, skipped = candidate_stops(sg, target["id"], tc), []
     else:
-        by_tag = {n["asset"]["tag"]: n for n in sg["objects"] if n["asset"]}
-        cands = [by_tag[t] for t in stops if t in by_tag and by_tag[t]["id"] != target["id"]]
-    chosen, goals, skipped = [], [], []
+        cands, skipped = manual_candidates(sg, stops, target["id"])
+    chosen, goals = [], []
     for n in cands:
-        if len(chosen) >= tc["max_stops"]:
+        if mode == "auto_excel" and len(chosen) >= tc["max_stops"]:        # a manual list is never cut
             skipped.append({"tag": n["asset"]["tag"], "reason": f"max_stops={tc['max_stops']} reached"})
             continue
         g = stop_goal(n, grid, dist, tc["reach"])
@@ -166,6 +188,38 @@ def plan_tour(cfg: Cfg, stops: list[str] | None = None) -> dict:
     return {"mode": mode, "stops": stops_out, "skipped": skipped,
             "points": pts3.round(4).tolist(), "length": round(length, 3),
             "min_clearance": round(min_clear, 4), "pause_s": tc["pause_s"]}
+
+
+class WalkPlanner:
+    """Live single-destination planner for the viewer ("Go to equipment"): from any position to any
+    object, on the same inflated grid as the tour. Never raises; failures come back as a message."""
+
+    def __init__(self, cfg: Cfg) -> None:
+        self.cfg = cfg
+        self.grid, self.layers, _, _ = load_inputs(cfg)
+        self.walk = self.layers["walkable"]
+
+    def to_object(self, start_x: float, start_z: float, node: dict) -> dict:
+        name = node["asset"]["tag"] if node.get("asset") else f"{node['id']} ({node['label']})"
+        start = nearest_walkable(self.walk, cell_of(self.grid, start_x, start_z))
+        dist = dijkstra(self.walk, start)
+        reach = self.cfg["tour"]["reach"]
+        goal = stop_goal(node, self.grid, dist, reach)
+        if goal is None:
+            m = reach * self.cfg["scene"]["units_to_m"]
+            return {"ok": False, "message": f"No collision-free path to {name}: no walkable floor within "
+                                            f"{m:.1f} m of it that the worker can reach."}
+        if goal == start:
+            return {"ok": False, "message": f"The worker is already at {name}."}
+        xz, _ = build_path(self.walk, self.grid, [start, goal], self.cfg["navgrid"]["resample"])
+        try:
+            clear = validate(xz, self.grid, self.layers)
+        except AssertionError as e:
+            return {"ok": False, "message": f"Path to {name} failed the safety check ({e})."}
+        y = self.cfg["scene"]["floor_y"]
+        pts = np.stack([xz[:, 0], np.full(len(xz), y), xz[:, 1]], 1)
+        return {"ok": True, "points": pts.tolist(), "length": float(np.linalg.norm(np.diff(xz, axis=0), axis=1).sum()),
+                "min_clearance": clear, "message": ""}
 
 
 def plot_tour(cfg: Cfg, tour: dict) -> None:
@@ -198,8 +252,8 @@ def plot_tour(cfg: Cfg, tour: dict) -> None:
     fig.tight_layout(); fig.savefig(out_path(cfg, "tour.png"), dpi=130); plt.close(fig)
 
 
-def run(cfg: Cfg) -> dict:
-    tour = plan_tour(cfg)
+def run(cfg: Cfg, stops: list[str] | None = None) -> dict:
+    tour = plan_tour(cfg, stops)
     with open(out_path(cfg, "tour.json"), "w", encoding="utf-8") as f:
         json.dump(tour, f, indent=1)
     plot_tour(cfg, tour)
@@ -216,4 +270,9 @@ def run(cfg: Cfg) -> dict:
 
 
 if __name__ == "__main__":
-    run(load_config())
+    import argparse
+    ap = argparse.ArgumentParser(description="Plan the inspection tour (always ends at the faulty target).")
+    ap.add_argument("--stops", help="comma-separated tags in visiting order, e.g. CV-003,M-006 "
+                                    "(default: config tour.stops; empty = automatic from Excel status)")
+    a = ap.parse_args()
+    run(load_config(), [s for s in a.stops.split(",") if s.strip()] if a.stops else None)

@@ -43,6 +43,27 @@ def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
     return sg, path, tour
 
 
+def stop_title(st: dict) -> str:
+    """One-line identity + status of a tour/go-to stop (handles objects without an asset record)."""
+    if not st.get("has_asset", True):
+        return f"{st['object_id']} · {st['label']} · no asset record"
+    return f"{st['tag']} · {st['condition_state']} · health {st['health_score']} · {st['issue_code']}"
+
+
+def goto_record(n: dict, sample_index: int) -> dict:
+    """Stop record for a single "Go to equipment" destination (asset or plain scene object)."""
+    a = n.get("asset")
+    rec = {"kind": "goto", "object_id": n["id"], "label": n["label"], "center": n["center"],
+           "sample_index": sample_index, "has_asset": bool(a)}
+    if a:
+        rec.update({"tag": a["tag"], "asset_class": a["asset_class"], "condition_state": a["condition_state"],
+                    "health_score": a["health_score"], "issue_code": a["issue_code"]})
+    else:
+        rec.update({"tag": n["id"], "asset_class": n["label"], "condition_state": "no_record",
+                    "health_score": None, "issue_code": "-"})
+    return rec
+
+
 def stop_text(stop: dict, i: int, n: int) -> str:
     return (f"**Stop {i}/{n}: {stop['tag']}** · {stop['asset_class']} · {stop['condition_state']} · "
             f"health **{stop['health_score']}** · {stop['issue_code']}"
@@ -174,6 +195,9 @@ class Sim:
         self.pause_until = 0.0
         self.face_target: np.ndarray | None = None   # avatar faces this point while stopped
         self.stop_active: dict | None = None         # tour stop currently highlighted
+        self.walk_mode = "tour"                      # "tour" (ends at faulty target) | "goto" (one equipment)
+        self.tour_route = (self.pts.copy(), list(self.stops))
+        self.planner: Any = None                     # pipeline.tour.WalkPlanner, created on first "Go to"
         self.tree = cKDTree(np.array([n["center"] for n in self.nodes])[:, [0, 2]])
         self.max_half = max(float(np.hypot(n["extent"][0], n["extent"][2])) / 2 for n in self.nodes)
         self.target = next(n for n in self.nodes if n["id"] == self.sg["target"]["object_id"])
@@ -270,14 +294,15 @@ class Sim:
                                           thickness=3.0, thickness_units="screen", visible=False)
         lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
         p = self.pts + lift
-        sc.add_line_segments("/path", np.stack([p[:-1], p[1:]], 1).astype(np.float32),
-                             tuple(self.vc["path_color"]), thickness=4.0, thickness_units="screen")
+        self.draw_path()
+        self.h_tour_markers: list[Any] = []
         for k, st in enumerate(self.stops, 1):              # numbered tour stop markers on the floor
             q = p[min(st["sample_index"], len(p) - 1)]
             col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
-            sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q))
-            sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}", position=(q[0], q[1] - 0.12, q[2]),
-                         anchor="bottom-center", font_screen_scale=0.8)
+            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
+            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
+                                                    position=(q[0], q[1] - 0.12, q[2]),
+                                                    anchor="bottom-center", font_screen_scale=0.8))
         t = self.target
         sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
@@ -460,6 +485,35 @@ class Sim:
             b_fly = g.add_button("Fly to object", visible=True)
             self.b_identify = g.add_button("Ask vision model what this is (paid)")
             self.md_identify = g.add_markdown("")
+        with g.add_folder("Walk mode"):
+            self.dd_walk = g.add_dropdown("Mode", ["Inspection tour", "Go to equipment"],
+                                          initial_value="Inspection tour")
+            goto_opts = [f"{n['asset']['tag']} · {n['label']} · {n['asset']['condition_state']}"
+                         for n in sorted((n for n in self.nodes if n["asset"]), key=lambda n: n["asset"]["tag"])]
+            self.dd_goto = g.add_dropdown("Equipment", goto_opts, initial_value=goto_opts[0], visible=False)
+            b_goto_tag = g.add_button("Walk to selected equipment", visible=False)
+            b_goto_click = g.add_button("Walk to clicked object", visible=False)
+            self.md_goto = g.add_markdown("", visible=False)
+        self.goto_widgets = (self.dd_goto, b_goto_tag, b_goto_click, self.md_goto)
+
+        @self.dd_walk.on_update
+        def _(_e: Any) -> None:
+            mode = "goto" if self.dd_walk.value == "Go to equipment" else "tour"
+            if mode != self.walk_mode:                      # ignore echoes of programmatic changes
+                self.set_walk_mode(mode)
+
+        @b_goto_tag.on_click
+        def _(_e: Any) -> None:
+            tag = self.dd_goto.value.split(" · ")[0]
+            self.go_to(next(n for n in self.nodes if n["asset"] and n["asset"]["tag"] == tag))
+
+        @b_goto_click.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                self.md_goto.content = "⚠️ Click an object in the 3D view first, then press this button."
+                return
+            self.go_to(self.selected)
+
         with g.add_folder("Inspection tour"):
             if self.tour:
                 route = " → ".join(["door"] + [s["tag"] for s in self.stops])
@@ -563,12 +617,13 @@ class Sim:
 
     def update(self) -> None:
         p = self.position()
-        at_target = self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
-        if at_target and not self.arrived:
-            self.arrived = True
-            self.on_arrival()
-        elif not at_target and self.arrived:
-            self.leave_target()
+        if self.walk_mode == "tour":            # "Go to equipment" never auto-diagnoses (paid budget)
+            at_target = self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
+            if at_target and not self.arrived:
+                self.arrived = True
+                self.on_arrival()
+            elif not at_target and self.arrived:
+                self.leave_target()
         self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1])
         r = float(self.sl_radius.value)
         idx = self.tree.query_ball_point(p[[0, 2]], r + self.max_half)
@@ -762,11 +817,75 @@ class Sim:
     def reach_stop(self, k: int) -> None:
         """Pause at tour stop k and show its Excel status (the last stop is the faulty target)."""
         st = self.stops[k]
-        self.md_stop.content = stop_text(st, k + 1, len(self.stops))
         self.next_stop = k + 1
         self.highlight_stop(st)
+        if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
+            self.md_goto.content = (f"✅ **Arrived at {stop_title(st)}**" + (
+                "  \nPress **Ask copilot** (Copilot panel) for a grounded diagnosis of this asset."
+                if st["has_asset"] else "  \n_No asset record: this object is not in the Excel pack._"))
+            if st["has_asset"]:
+                self.dd_asset.value = st["tag"]
+            return
+        self.md_stop.content = stop_text(st, k + 1, len(self.stops))
         if st["kind"] != "target":
             self.pause_until = time.time() + float(self.tour["pause_s"])
+
+    # --- routes: inspection tour vs. go to one equipment ---
+    def draw_path(self) -> None:
+        p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
+        self.h_path = self.server.scene.add_line_segments(
+            "/path", np.stack([p[:-1], p[1:]], 1).astype(np.float32), tuple(self.vc["path_color"]),
+            thickness=4.0, thickness_units="screen")
+
+    def set_route(self, points: Any, stops: list[dict]) -> None:
+        """Replace the walked route (and its stops), start from its beginning, redraw the path."""
+        self.pts = np.asarray(points, np.float64)
+        self.s = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(self.pts, axis=0), axis=1))])
+        self.stops = stops
+        self.stop_s = [float(self.s[min(st["sample_index"], len(self.s) - 1)]) for st in stops]
+        self.next_stop, self.pause_until, self.dist = 0, 0.0, 0.0
+        self.clear_stop_highlight()
+        self.sl_pos.max = float(self.s[-1])
+        self.sl_pos.value = 0.0
+        self.draw_path()
+
+    def set_walk_mode(self, mode: str) -> None:
+        self.playing = False
+        if self.arrived:
+            self.leave_target()
+        self.walk_mode = mode
+        for h in self.h_tour_markers:
+            h.visible = mode == "tour"
+        for w in self.goto_widgets:
+            w.visible = mode == "goto"
+        if mode == "tour":
+            self.set_route(*self.tour_route)
+            self.md_stop.content = "_Press Play to start the tour._"
+        else:
+            self.md_goto.content = ("Pick equipment and press **Walk to selected equipment**, or click any object "
+                                    "in the 3D view and press **Walk to clicked object**. The worker walks from "
+                                    "where it stands now.")
+        self.update()
+
+    def go_to(self, node: dict) -> None:
+        """Plan from the worker's current position to one object and start walking (Go to mode)."""
+        if self.walk_mode != "goto":
+            self.set_walk_mode("goto")
+            self.dd_walk.value = "Go to equipment"           # callback sees the mode already set: no-op
+        if self.planner is None:
+            from pipeline.tour import WalkPlanner
+            self.planner = WalkPlanner(self.cfg)
+        p = self.position()
+        plan = self.planner.to_object(float(p[0]), float(p[2]), node)
+        if not plan["ok"]:
+            self.md_goto.content = f"⚠️ {plan['message']}"
+            return
+        self.set_route(plan["points"], [goto_record(node, len(plan["points"]) - 1)])
+        dest = node["asset"]["tag"] if node.get("asset") else f"{node['id']} ({node['label']})"
+        note = "" if node.get("asset") else "  \n_No asset record: this object is not in the Excel pack._"
+        self.md_goto.content = (f"🚶 Walking to **{dest}**: {plan['length'] * self.cfg['scene']['units_to_m']:.1f} m, "
+                                f"min clearance {plan['min_clearance']:.2f}{note}")
+        self.playing = True
 
     def highlight_stop(self, st: dict) -> None:
         """Thick coloured frame + translucent fill + big label on the stop's equipment; worker faces it."""
@@ -782,7 +901,7 @@ class Sim:
             "/stop/fill", tuple(col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
             opacity=self.vc["stop_fill_opacity"], cast_shadow=False, receive_shadow=False)
         self.h_stop_label = self.server.scene.add_label(
-            "/stop/label", f"{st['tag']} · {st['condition_state']} · health {st['health_score']} · {st['issue_code']}",
+            "/stop/label", stop_title(st),
             position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
             anchor="bottom-center", font_screen_scale=self.vc["stop_label_scale"])
         self.stop_active = st

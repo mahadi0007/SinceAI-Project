@@ -309,6 +309,7 @@ propose:                    # contextual proposals (pipeline/propose.py)
   depth_gate_size: 1.2
 
 tour:                       # inspection tour: door -> warning assets (from Excel status) -> faulty target
+  stops: []                 # manual route: tags in visiting order, e.g. [CV-003, M-006]; [] = automatic from Excel
   conditions: [attention_required, degraded]   # which Current_State conditions become stops, most urgent first
   max_stops: 5              # keeps the walk a sensible length for the demo
   reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
