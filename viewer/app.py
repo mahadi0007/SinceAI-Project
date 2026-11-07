@@ -28,6 +28,7 @@ from viewer import scene_edits as se
 from viewer import ui
 
 Cfg = dict[str, Any]
+INSPECT_STAGE = np.array([2000.0, 0.0, 0.0])   # "Open in 3D" stage: beyond the camera's far plane (1000) from the room
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
 
@@ -282,6 +283,12 @@ class Sim:
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.revision = scene_revision(cfg, self.pick_lab)     # every derived artifact must match this
         self.selected: dict | None = None
+        self.info_node: dict | None = None           # what the Info tab shows (equipment or plain object)
+        self.inspected: dict | None = None           # object opened in 3D
+        self.inspect_cams: dict[int, tuple] = {}     # cameras of the browsers that opened it, restored on close
+        self.h_inspect: list[Any] = []
+        self.b_open3d: list[Any] = []                # "Open in 3D" buttons (clicked object, Info)
+        self._seg_tree: Any = None                   # labelled segment points, for an object's own Gaussians
         self.node_by_id = {n["id"]: n for n in self.nodes}
         self.obj_index = {o["id"]: k for k, o in enumerate(self.sg["objects"])}
         self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
@@ -717,11 +724,16 @@ class Sim:
             self.b_identify = g.add_button("Ask the AI to know this", color="gray", icon="sparkles",
                                            hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
+            b_open_sel = g.add_button("Open in 3D", icon="cube",
+                                      hint="Show this object alone: drag to turn it, scroll to zoom.")
             b_close = g.add_button("Close", color="gray", icon="x")
         self.h_hero = g.add_html("")                          # status card of the selected equipment/object
         self.h_audio = g.add_html("", visible=False)          # spoken briefing player
         self.b_ask = g.add_button("Ask the copilot", color="gray", icon="message-chatbot",
                                   hint="Ask the copilot anything about this equipment (1 live AI request).")
+        b_open_info = g.add_button("Open in 3D", icon="cube",
+                                   hint="Show this object alone: drag to turn it, scroll to zoom.")
+        self.b_open3d += [b_open_sel, b_open_info]
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="teal")
         self.md_copilot = g.add_markdown("")
@@ -747,6 +759,14 @@ class Sim:
         @self.b_ask.on_click
         def _(e: Any) -> None:
             self.open_question_dialog(e.client)
+
+        @b_open_sel.on_click
+        def _(e: Any) -> None:
+            self.toggle_3d(self.selected, e.client)
+
+        @b_open_info.on_click
+        def _(e: Any) -> None:
+            self.toggle_3d(self.info_node, e.client)
 
         @b_close.on_click
         def _(_e: Any) -> None:
@@ -831,6 +851,7 @@ class Sim:
         Then the copilot reads its summary aloud (ElevenLabs; cached per text, so repeats are free)."""
         n = self.selected_equipment()
         tag = n["asset"]["tag"]
+        self.info_node = n
         self.h_hero.content = ui.asset_hero(n["asset"], self.excel_sources(tag))
         if self.arrived and n is self.target:                 # the tour's spoken briefing owns the panel
             self.mark_selected(n)
@@ -887,6 +908,7 @@ class Sim:
     def show_object(self, n: dict) -> None:
         """All we know about a scene object without an Excel record: label, size, scan points, crop image."""
         self._load_token += 1                                  # cancels a pending equipment load
+        self.info_node = n
         self.set_audio(None)
         self.set_object_view(True)
         self.h_hero.content = ""                               # the Clicked object card above shows it
@@ -1635,6 +1657,74 @@ class Sim:
         if n["asset"]:                                               # clicked equipment -> Info tab
             self.choose_equipment(n["asset"]["tag"])
 
+    # --- open in 3D: the object alone on a distant stage; the browser that opened it orbits / zooms around it ---
+    def object_splat(self, n: dict) -> dict[str, np.ndarray]:
+        """The object's Gaussians relative to its box centre: an editable object's own piece, else every Gaussian
+        whose nearest segmented point (within label.member_dist + splat_owner.max_size) belongs to it."""
+        oid = n.get("copy_of", n["id"])
+        if oid in self.movable:
+            m = self.movable[oid]
+            return {"xyz": m["xyz"], "rgb": m["rgb"], "op": m["op"], "cov": m["cov"]}
+        if self._seg_tree is None:
+            on = self.pick_lab >= 0
+            self._seg_tree, self._seg_lab = cKDTree(self.pick_xyz[on]), self.pick_lab[on]
+        src = self.node_by_id[oid]
+        reach = self.cfg["label"]["member_dist"] + self.vc["splat_owner"]["max_size"]
+        x = self.sp["xyz"]
+        cand = np.flatnonzero(np.all((x >= np.array(src["bbox_min"]) - reach)
+                                     & (x <= np.array(src["bbox_max"]) + reach), axis=1))
+        dist, j = self._seg_tree.query(x[cand], distance_upper_bound=reach, workers=-1)
+        own = (dist <= reach) & (self._seg_lab[np.minimum(j, len(self._seg_lab) - 1)] == self.obj_index[oid])
+        rows = cand[own]
+        out = {"xyz": x[rows] - np.array(src["center"]), "rgb": self.sp["rgb"][rows], "op": self.sp["opacity"][rows]}
+        if "cov" in self.sp:
+            out["cov"] = self.sp["cov"][rows]
+        return out
+
+    def toggle_3d(self, n: dict | None, client: Any) -> None:
+        if self.inspected is not None:
+            self.close_3d()
+        elif n is not None:
+            self.open_3d(n, client)
+
+    def open_3d(self, n: dict, client: Any) -> None:
+        g = self.object_splat(n)
+        if not len(g["xyz"]):
+            self.md_copilot.content = f"⚠️ No scan points found for {n['id']}."
+            return
+        sc = self.server.scene
+        self.h_inspect = [sc.add_frame("/inspect", position=tuple(INSPECT_STAGE), show_axes=False)]
+        if self.vc["render_splats"]:
+            self.h_inspect.append(sc.add_gaussian_splats("/inspect/splat", centers=g["xyz"], rgbs=g["rgb"],
+                                                         opacities=g["op"], covariances=g["cov"]))
+        else:
+            self.h_inspect.append(sc.add_point_cloud("/inspect/splat", g["xyz"], (g["rgb"] * 255).astype(np.uint8),
+                                                     point_size=self.vc["point_size"]))
+        self.inspected = n
+        self.inspect_cams[client.client_id] = (client.camera.position, client.camera.look_at, client.camera.fov)
+        r = max(0.05, 0.5 * float(np.linalg.norm(np.percentile(g["xyz"], 98, 0) - np.percentile(g["xyz"], 2, 0))))
+        view = np.array([0.5, -0.4, 1.0])                         # front (+z), a bit to the side and above (-y)
+        dist = 1.2 * r / np.sin(client.camera.fov / 2)
+        with client.atomic():
+            client.camera.position = tuple(INSPECT_STAGE + dist * view / np.linalg.norm(view))
+            client.camera.look_at = tuple(INSPECT_STAGE)                # after position (which shifts look_at)
+        for b in self.b_open3d:
+            b.label, b.icon = "Back to the room", "arrow-back-up"
+
+    def close_3d(self) -> None:
+        for h in reversed(self.h_inspect):
+            h.remove()
+        self.h_inspect, self.inspected = [], None
+        clients = self.server.get_clients()
+        for cid, (pos, look, fov) in self.inspect_cams.items():
+            if cid in clients:
+                c = clients[cid]
+                with c.atomic():
+                    c.camera.position, c.camera.look_at, c.camera.fov = pos, look, fov
+        self.inspect_cams = {}
+        for b in self.b_open3d:
+            b.label, b.icon = "Open in 3D", "cube"
+
     # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
     # One rigid transform per instance (frame /movable/<name>) carries its splat piece, BIM mesh, box, label and
     # pick points; the layout lives in out/scene_edits.json (viewer/scene_edits.py), never in scene.ifc.
@@ -2125,7 +2215,7 @@ class Sim:
             return
         for c in clients:
             saved = self._saved_cams.get(c.client_id)
-            if saved:
+            if saved and c.client_id not in self.inspect_cams:
                 with c.atomic():
                     c.camera.position, c.camera.look_at, c.camera.fov = saved
         self._saved_cams = {}
@@ -2159,6 +2249,8 @@ class Sim:
         self._pov_look = look
         fov = float(np.radians(pc["fov_deg"]))
         for c in self.server.get_clients().values():
+            if c.client_id in self.inspect_cams:                     # looking at an object opened in 3D
+                continue
             with c.atomic():
                 c.camera.up_direction = tuple(up)
                 c.camera.fov = fov
