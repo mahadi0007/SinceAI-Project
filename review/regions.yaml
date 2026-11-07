@@ -1,0 +1,86 @@
+# Fixed review regions and reviewed reference components (native coordinates, up = -y).
+#
+# References were set by visual review of calibrated renders (out_review/closeups/*.png,
+# 2026-11-07) of the baseline segmentation. They are APPROXIMATE axis-aligned 3D boxes around
+# the visible component, NOT pixel-accurate ground truth and NOT derived from workbook anchors.
+# Ontology (component class): pump, motor, valve (body + handwheel/actuator), pipe run, sensor,
+# vessel, structure, unknown. Assembly membership and asset identity are kept separate.
+#
+# Views: calibrated pinhole cameras (eye -> target, fov deg) used for proposals, SAM and visibility.
+
+regions:
+  - id: RV-01
+    name: back-right wall, two inline circulator pumps + handwheel valve
+    views:
+      - {eye: [2.40, 0.15, -2.20], target: [2.40, 0.25, -3.45], fov: 60}
+      - {eye: [1.40, 0.00, -2.50], target: [2.40, 0.25, -3.45], fov: 55}
+    refs:
+      - {id: RC-01, cls: pump, note: "circulator pump A (grey motor head) inline on vertical pipe",
+         box: [[2.64, 0.39, -3.51], [2.82, 0.57, -3.21]]}
+      - {id: RC-02, cls: pump, note: "circulator pump B, head split across baseline 638/395",
+         box: [[2.08, 0.37, -3.51], [2.26, 0.58, -3.16]]}
+      - {id: RC-03, cls: valve, note: "red handwheel valve, inside mixed baseline cluster OBJ-0009",
+         box: [[1.93, -0.28, -3.56], [2.30, 0.12, -3.25]],
+         revised: "2026-11-07 after inspecting out_review/compare/RV-01_v0.png: z_min -3.62 -> -3.56, the box
+           wrongly included wall-side pipes behind the valve's pipe (valve on pipe at z~-3.45, handwheel
+           toward the room). Original box: [[1.93, -0.28, -3.62], [2.30, 0.12, -3.25]]"}
+      - {id: RC-04, cls: pipe run, note: "insulated U-bend lower part (baseline 603/911/213/402)",
+         box: [[2.27, -0.12, -3.73], [2.68, 0.24, -3.38]]}
+  - id: RV-02
+    name: back-left wall, valve on vertical pipe + adjacent parallel pipes
+    views:
+      - {eye: [-1.90, 0.20, -2.40], target: [-1.90, 0.35, -3.50], fov: 60}
+      - {eye: [-1.00, 0.10, -2.60], target: [-1.80, 0.40, -3.50], fov: 55}
+    refs:
+      - {id: RC-05, cls: valve, note: "valve body + ring handwheel (baseline 800 + part of mixed OBJ-0020)",
+         box: [[-1.68, 0.33, -3.42], [-1.40, 0.68, -3.15]]}
+      - {id: RC-06, cls: pipe run, note: "vertical pipe (baseline 192), parallel neighbour of RC-07",
+         box: [[-2.31, -0.58, -3.53], [-2.13, 0.74, -3.39]]}
+      - {id: RC-07, cls: pipe run, note: "thin vertical pipe (baseline 689), must stay separate from RC-06",
+         box: [[-2.47, -0.06, -3.49], [-2.37, 0.44, -3.31]]}
+  - id: RV-03
+    name: front, two red vessels (should stay whole and separate)
+    views:
+      - {eye: [0.60, -0.10, 0.30], target: [0.60, 0.20, 2.00], fov: 60}
+    refs:
+      - {id: RC-08, cls: vessel, note: "red vessel left (baseline 32)",
+         box: [[-0.10, -0.32, 1.58], [0.62, 0.46, 2.30]]}
+      - {id: RC-09, cls: vessel, note: "red vessel right (baseline 39)",
+         box: [[0.62, -0.37, 1.58], [1.38, 0.37, 2.34]]}
+  - id: RV-04
+    name: left wall machine near historical target OBJ-0269 (qualitative only, no reliable reference)
+    views:
+      - {eye: [-2.70, 0.10, -2.60], target: [-3.60, 0.80, -1.30], fov: 60}
+      - {eye: [-2.70, -0.40, -1.00], target: [-3.60, 0.90, -1.60], fov: 60}
+    refs: []
+  # expansion regions (qualitative review only: inspect out_review/compare/<id>_v*.png)
+  - id: RV-05
+    name: back wall, left-centre valves and pipes
+    views:
+      - {eye: [-0.60, 0.00, -2.40], target: [-0.60, 0.30, -3.60], fov: 60}
+      - {eye: [0.20, -0.10, -2.50], target: [-0.60, 0.30, -3.60], fov: 55}
+    refs: []
+  - id: RV-06
+    name: right wall machinery
+    views:
+      - {eye: [2.30, -0.10, -0.80], target: [3.80, 0.70, -0.60], fov: 60}
+      - {eye: [2.60, -0.30, 0.30], target: [3.80, 0.60, -0.80], fov: 60}
+    refs: []
+  - id: RV-07
+    name: front-left corner equipment
+    views:
+      - {eye: [-2.60, -0.10, 1.20], target: [-4.40, 0.60, 2.40], fov: 60}
+      - {eye: [-2.20, -0.20, 2.40], target: [-4.20, 0.50, 2.20], fov: 60}
+    refs: []
+  - id: RV-08
+    name: back wall, centre-right
+    views:
+      - {eye: [0.90, 0.10, -2.30], target: [0.90, 0.30, -3.60], fov: 60}
+      - {eye: [0.10, 0.00, -2.40], target: [0.90, 0.30, -3.60], fov: 55}
+    refs: []
+  - id: RV-09
+    name: front wall centre
+    views:
+      - {eye: [-0.80, -0.10, 1.60], target: [-0.80, 0.30, 3.30], fov: 60}
+      - {eye: [0.20, -0.20, 1.50], target: [-0.80, 0.30, 3.30], fov: 55}
+    refs: []

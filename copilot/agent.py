@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from copilot.evidence import build_evidence, save as save_evidence
-from copilot.llm import generate
+from copilot.llm import LLMUnavailable, generate
 from pipeline.common import load_config, out_path
 
 Cfg = dict[str, Any]
@@ -59,9 +59,10 @@ def user_prompt(pack: dict, question: str | None) -> str:
 
 # ---------- LLM ----------
 
-def call_gemini(system: str, user: str, cc: Cfg) -> tuple[dict, str]:
-    # this key's API version rejects system_instruction, so the contract goes into the message
-    text, model = generate(f"{system}\n\n---\n\n{user}", cc, json_mode=True)
+def call_llm(system: str, user: str, cc: Cfg) -> tuple[dict, str]:
+    """One paid request through the provider-neutral layer (Featherless). No retry."""
+    text, model = generate(user, cc, json_mode=True, system=system, purpose="diagnosis",
+                           max_tokens=cc.get("max_tokens", 2000))
     return parse_json(text), model
 
 
@@ -150,23 +151,38 @@ def template_diagnosis(pack: dict) -> dict:
 
 # ---------- entry points ----------
 
-def cache_path(cfg: Cfg, tag: str, question: str | None):
-    qh = hashlib.sha1((question or "").strip().lower().encode()).hexdigest()[:10]
+def cache_path(cfg: Cfg, tag: str, question: str | None, pack: dict | None = None):
+    """Keyed by question + model + evidence pack, so a cached answer is reused only for the same evidence."""
+    key = (question or "").strip().lower() + "|" + cfg["copilot"]["model"]
+    if pack is not None:
+        key += "|" + json.dumps(pack, sort_keys=True, default=str)
+    qh = hashlib.sha1(key.encode()).hexdigest()[:10]
     d = out_path(cfg, "diagnosis_cache")
     d.mkdir(exist_ok=True)
     return d / f"{tag}__{qh}.json"
 
 
-def diagnose(key: str, question: str | None = None, cfg: Cfg | None = None) -> dict:
-    """LLM diagnosis -> (if every model fails) last good LLM answer for the same question -> template."""
+def diagnose(key: str, question: str | None = None, cfg: Cfg | None = None, allow_paid: bool = True) -> dict:
+    """Cached answer for the same evidence -> paid LLM call (if allowed and within budget) -> template.
+    allow_paid=False is used for automatic viewer calls so they never spend credits."""
     cfg = cfg or load_config()
     pack = build_evidence(key, cfg)
     save_evidence(pack, cfg)
     tag = pack["asset"]["tag"]
-    cp = cache_path(cfg, tag, question)
+    cp = cache_path(cfg, tag, question, pack)
     t0 = time.time()
     try:
-        raw, model = call_gemini(system_prompt(pack), user_prompt(pack, question), cfg["copilot"])
+        if cp.exists():
+            c = json.loads(cp.read_text(encoding="utf-8"))
+            raw, model = c["raw"], f"{c['model']} (cached answer from {c['at']}, same evidence)"
+            d = validate_citations(json.loads(json.dumps(raw)), pack)
+            d["meta"] = {"source": model, "latency_s": round(time.time() - t0, 1), "question": question,
+                         "scene": pack["scene"], "status": pack["current_state"],
+                         "sources": describe_ids(pack, d["citation_check"]["cited_ids"])}
+            return d
+        if not allow_paid:
+            raise LLMUnavailable("automatic call: paid requests disabled (press 'Ask copilot')")
+        raw, model = call_llm(system_prompt(pack), user_prompt(pack, question), cfg["copilot"])
         cp.write_text(json.dumps({"raw": raw, "model": model, "at": time.strftime("%Y-%m-%d %H:%M")}),
                       encoding="utf-8")
         d, source = raw, model

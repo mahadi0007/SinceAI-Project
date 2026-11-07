@@ -8,3 +8,5 @@ __pycache__/
 # challenge partner documents
 *.docx
 out_*/
+llm_ledger.jsonl
+.pytest_cache/
