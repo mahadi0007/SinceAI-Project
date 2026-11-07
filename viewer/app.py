@@ -15,7 +15,7 @@ import viser
 from scipy.spatial import cKDTree
 
 from copilot.agent import diagnose, to_markdown
-from pipeline.common import load_config, out_path, repo_path
+from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
 
 Cfg = dict[str, Any]
@@ -110,7 +110,21 @@ def selection_text(n: dict, u2m: float) -> str:
           f"above floor · {n['n_points']} points" + (" · overhead" if "overhead" in n.get("tags", []) else "")]
     if n.get("label_vlm"):
         v = n["label_vlm"]
-        md += ["", f"_Gemini's low-confidence guess: {v.get('label')} ({v.get('confidence')})_"]
+        md += ["", f"_Vision model's low-confidence guess: {v.get('label')} ({v.get('confidence')})_"]
+    rp = n.get("repair")
+    if rp:
+        if rp.get("family") == "context":
+            md += ["", f"**Repaired boundary** (context): {rp.get('region')}/{rp.get('cid')} proposed as "
+                       f"_{rp.get('cls')}_ ({rp.get('confidence')}) by {rp.get('model')}, refined by SAM 2.1 masks + "
+                       f"visible 3D support. Unverified; revert via `repair.context.disabled`."]
+        else:
+            md += ["", f"**Repaired boundary** (geometry): {len(rp.get('leaves', []))} pipe pieces joined by "
+                       f"centreline/thickness/gap checks."]
+    if n.get("fragments"):
+        md += [f"_{len(n['fragments'])} fine fragment(s); baseline objects: "
+               f"{', '.join(n.get('baseline_ids', [])[:6]) or '-'}_"]
+    if n.get("assembly"):
+        md += [f"_Assembly {n['assembly']['id']} ({n['assembly']['note']})_"]
     a = n["asset"]
     if a:
         md += ["", "| Tag | Class | Health | Status | Urgency |", "|---|---|---|---|---|",
@@ -118,7 +132,8 @@ def selection_text(n: dict, u2m: float) -> str:
                f"{a['urgency']} |", "",
                f"Issue: **{a['issue_code']}**: {a['issue_summary']}  ",
                f"Next check: {a['recommended_next_check']}  ",
-               f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']})_"]
+               f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']}) · identity "
+               f"{'VERIFIED' if a.get('identity_verified') else 'unverified'} ({a.get('identity_basis', '?')})_"]
     else:
         md += ["", "_No asset record in the Excel pack (not mapped)._"]
     return "\n".join(md)
@@ -167,6 +182,21 @@ class Sim:
         segs, cols = edges_for(self.nodes, self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
+        # before/after: baseline boxes (orange) and repaired objects (magenta = context, cyan = geometry)
+        bp = ROOT / "out_baseline" / "assets.json"
+        base = [a for a in json.loads(bp.read_text(encoding="utf-8")) if a["kind"] == "object"] if bp.exists() else []
+        self.n_baseline = len(base)
+        bs = np.concatenate([box_edges(a["bbox_min"], a["bbox_max"]) for a in base]) if base else np.zeros((0, 2, 3), np.float32)
+        self.h_base = sc.add_line_segments("/baseline_boxes", bs, (255, 140, 0), thickness=1.5,
+                                           thickness_units="screen", visible=False)
+        ctx = [n for n in self.nodes if n.get("repair", {}).get("family") == "context"]
+        geo = [n for n in self.nodes if n.get("repair", {}).get("family") == "geometry"]
+        self.n_ctx, self.n_geo = len(ctx), len(geo)
+        segs_r = [box_edges(n["bbox_min"], n["bbox_max"]) for n in ctx + geo]
+        cols_r = [np.tile(np.array([255, 0, 200] if n in ctx else [0, 200, 255], np.uint8), (12, 2, 1)) for n in ctx + geo]
+        self.h_rep = sc.add_line_segments("/repaired_boxes", np.concatenate(segs_r) if segs_r else np.zeros((0, 2, 3), np.float32),
+                                          np.concatenate(cols_r) if cols_r else np.zeros((0, 2, 3), np.uint8),
+                                          thickness=3.0, thickness_units="screen", visible=False)
         lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
         p = self.pts + lift
         sc.add_line_segments("/path", np.stack([p[:-1], p[1:]], 1).astype(np.float32),
@@ -264,11 +294,51 @@ class Sim:
         self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
         self.cb_boxes = g.add_checkbox("Show all frames", True)
         self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
+        with g.add_folder("Boundary repair: before / after"):
+            g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
+                           f"(magenta) · **{self.n_geo}** geometry pipe joins (cyan)  \nBefore: **{self.n_baseline}** "
+                           f"baseline objects (orange). Fewer boxes is not the goal; check whole components.")
+            self.cb_base = g.add_checkbox("Show baseline boxes (before)", False)
+            self.cb_rep = g.add_checkbox("Highlight repaired objects", True)
+            self.h_rep.visible = True
+            reg = self.review_regions()
+            self.dd_region = g.add_dropdown("Review region", ["-"] + list(reg), initial_value="-")
+            self.md_region = g.add_markdown("_Pick a region: the camera flies to its calibrated view; the image shows "
+                                            "baseline | geometry-only | geometry+context (white = reviewed reference)._")
+            self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+
+        @self.cb_base.on_update
+        def _(_e: Any) -> None:
+            self.h_base.visible = self.cb_base.value
+
+        @self.cb_rep.on_update
+        def _(_e: Any) -> None:
+            self.h_rep.visible = self.cb_rep.value
+
+        @self.dd_region.on_update
+        def _(e: Any) -> None:
+            rid = self.dd_region.value
+            if rid == "-":
+                return
+            r = self.review_regions()[rid]
+            v = r["views"][0]
+            for cl in self.server.get_clients().values():
+                cl.camera.position = tuple(v["eye"])
+                cl.camera.look_at = tuple(v["target"])
+            refs = ", ".join(f"{x['id']} {x['cls']}" for x in r["refs"]) or "none (qualitative)"
+            self.md_region.content = f"**{rid}** {r['name']}  \nReferences: {refs}"
+            img = ROOT / "out_review" / "compare" / f"{rid}_v0.png"
+            if img.exists():
+                from PIL import Image
+                im = Image.open(img).convert("RGB")
+                im.thumbnail((1400, 400))
+                self.img_region.image = np.asarray(im)
+                self.img_region.visible = True
         with g.add_folder("Selected object (click in the scene)"):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             b_fly = g.add_button("Fly to object", visible=True)
-            self.b_identify = g.add_button("Ask Gemini what this is")
+            self.b_identify = g.add_button("Ask vision model what this is (paid)")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Nearby assets"):
             self.md_near = g.add_markdown("")
@@ -290,7 +360,7 @@ class Sim:
             if self.selected is None:
                 return
             n = self.selected
-            self.md_identify.content = f"_Asking Gemini about {n['id']}…_"
+            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
 
             def work() -> None:
                 from pipeline.label import identify_object
@@ -342,6 +412,14 @@ class Sim:
                                             color=tuple(self.vc["avatar"]["ring_color"]),
                                             opacity=0.15, scale=(r, 0.01, r))
             self.update()
+
+    @staticmethod
+    def review_regions() -> dict:
+        import yaml
+        p = ROOT / "review" / "regions.yaml"
+        if not p.exists():
+            return {}
+        return {r["id"]: r for r in yaml.safe_load(p.read_text(encoding="utf-8"))["regions"]}
 
     # --- per-frame ---
     def position(self) -> np.ndarray:
@@ -431,7 +509,7 @@ class Sim:
         self.b_ask.disabled = on
         self.b_ask.label = "Copilot is working…" if on else "Ask copilot"
 
-    def run_job(self, tag: str, question: str | None, on_done: Any) -> None:
+    def run_job(self, tag: str, question: str | None, on_done: Any, allow_paid: bool = True) -> None:
         """Run diagnose() in a thread; show progress bar + elapsed seconds until it returns."""
         if self._busy:
             return
@@ -442,14 +520,14 @@ class Sim:
         def tick() -> None:
             while self._busy:
                 el = time.time() - t0
-                self.set_loading(True, f"⏳ **Gemini is analysing {tag}**{q}\n\n"
+                self.set_loading(True, f"⏳ **Copilot is analysing {tag}**{q}\n\n"
                                        f"Evidence pack → model → citation check · **{el:.0f} s** "
                                        f"(usually ~{expected} s)", min(95.0, 100 * el / expected))
                 time.sleep(0.5)
 
         def work() -> None:
             try:
-                d = diagnose(tag, question, self.cfg)
+                d = diagnose(tag, question, self.cfg, allow_paid=allow_paid)
             finally:
                 self._busy = False
                 self.set_loading(False)
@@ -469,7 +547,8 @@ class Sim:
                 self.show_diagnosis()
             else:
                 self.md_copilot.content = "✅ _Diagnosis for the target is ready; it opens on arrival._"
-        self.run_job(self.target["asset"]["tag"], None, done)
+        # automatic prefetch never spends credits: cached answer for the same evidence, else template
+        self.run_job(self.target["asset"]["tag"], None, done, allow_paid=self.vc.get("auto_copilot_paid", False))
 
     def arrival_header(self) -> str:
         a = self.target["asset"]

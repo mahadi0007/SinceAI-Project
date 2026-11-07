@@ -238,6 +238,8 @@ def merge_collinear_pipes(objs: list[dict], xyz: np.ndarray, mc: Cfg) -> list[di
         r = find(i)
         if r in merged:
             merged[r]["idx"] = np.concatenate([merged[r]["idx"], objs[i]["idx"]])
+            merged[r]["frags"] = merged[r]["frags"] + objs[i]["frags"]
+            merged[r]["merges"] = merged[r].get("merges", []) + [("collinear", objs[i]["frags"])]
             merged[r]["tags"] = sorted(set(merged[r]["tags"]) | set(objs[i]["tags"]))
         else:
             merged[r] = objs[i]
@@ -256,6 +258,8 @@ def merge_contained(objs: list[dict], xyz: np.ndarray, tol: float) -> list[dict]
             if alive[j] and objs[i]["hint"] == objs[j]["hint"] and \
                (boxes[i][0] >= boxes[j][0] - tol).all() and (boxes[i][1] <= boxes[j][1] + tol).all():
                 objs[j]["idx"] = np.concatenate([objs[j]["idx"], objs[i]["idx"]])
+                objs[j]["frags"] = objs[j]["frags"] + objs[i]["frags"]
+                objs[j]["merges"] = objs[j].get("merges", []) + [("contained", objs[i]["frags"])]
                 alive[i] = False
                 break
     print(f"[contain] merged {alive.count(False)} contained boxes")
@@ -313,6 +317,9 @@ def build_assets(planes: list[dict], objs: list[dict], xyz: np.ndarray, rgb: np.
         labels[o["idx"]] = len(assets)
         assets.append(cluster_record(len(assets), o["idx"], xyz, rgb, opacity, cfg,
                                      "object", o["hint"], o["tags"]))
+        assets[-1]["fragments"] = sorted(int(f) for f in o["frags"])        # fine fragment ids (frag array)
+        assets[-1]["merge_log"] = [{"rule": r, "fragments": sorted(int(x) for x in fr)}
+                                   for r, fr in o.get("merges", [])]
     return assets, labels
 
 
@@ -354,10 +361,29 @@ def plot_view(xyz: np.ndarray, labels: np.ndarray, assets: list[dict], axes: tup
 
 # ---------- main ----------
 
+def write_manifest(cfg: Cfg, n_vox: int, n_frag: int, n_obj: int) -> None:
+    """Input checksum + config + seed so a baseline run can be reproduced and compared."""
+    import hashlib
+    p = repo_path(cfg["paths"]["ply"])
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 22), b""):
+            h.update(chunk)
+    man = {"ply": str(p), "ply_sha256": h.hexdigest(), "ply_bytes": p.stat().st_size,
+           "segment_config": cfg["segment"], "load_config": cfg["load"], "scene": cfg["scene"],
+           "n_voxel_points": n_vox, "n_fine_fragments": n_frag, "n_objects": n_obj,
+           "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with open(out_path(cfg, "segment_manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(man, f, indent=1)
+
+
 def run(cfg: Cfg) -> list[dict]:
     t0 = time.time()
     sc = cfg["segment"]
-    xyz, rgb, opacity, normals = downsample_and_denoise(load_points(cfg), sc)
+    np.random.seed(sc["seed"])
+    o3d.utility.random.seed(sc["seed"])
+    d = load_points(cfg)
+    xyz, rgb, opacity, normals = downsample_and_denoise(d, sc)
     planes, remaining = remove_known_planes(xyz, normals, sc)
     planes += ransac_extra_planes(xyz, remaining, sc)
     oi = np.where(remaining)[0]
@@ -371,7 +397,8 @@ def run(cfg: Cfg) -> list[dict]:
     for k, (p, _, _) in enumerate(parts):
         lab[oi[p]] = k
     lab[oi] = reassign_noise(lab[oi], xyz[oi], sc["noise_reassign_dist"])
-    objs = [{"idx": np.where(lab == k)[0], "hint": h, "axis": c, "tags": []}
+    frag = lab.copy()                                     # fine fragments, before any merge
+    objs = [{"idx": np.where(lab == k)[0], "hint": h, "axis": c, "tags": [], "frags": [k]}
             for k, (_, h, c) in enumerate(parts)]
     objs = filter_overhead(objs, xyz, opacity, cfg)
     objs = merge_collinear_pipes(objs, xyz, sc["collinear"])
@@ -389,8 +416,18 @@ def run(cfg: Cfg) -> list[dict]:
     print(f"[result] hints {hints}  overhead {sum('overhead' in A['tags'] for A in ob)}")
     with open(out_path(cfg, "assets.json"), "w", encoding="utf-8") as f:
         json.dump(assets, f, indent=1)
+    # provenance: nearest voxel point of every kept source Gaussian (row ids = original PLY rows)
+    src_dist, src_vox = cKDTree(xyz).query(d["xyz"], k=1)
+    frag_hint = np.array([h or "" for _, h, _ in parts])
+    frag_axis = np.array([c for _, _, c in parts], np.int8)
     np.savez_compressed(out_path(cfg, "segment_points.npz"), xyz=xyz.astype(np.float32),
-                        rgb=rgb.astype(np.float32), opacity=opacity.astype(np.float32), labels=labels)
+                        rgb=rgb.astype(np.float32), opacity=opacity.astype(np.float32), labels=labels,
+                        normals=normals.astype(np.float32), frag=frag.astype(np.int32),
+                        frag_hint=frag_hint, frag_axis=frag_axis,
+                        label_ids=np.array([A["id"] for A in assets]),       # labels index this list
+                        src_rows=d["row_ids"], src_vox=src_vox.astype(np.int32),
+                        src_dist=src_dist.astype(np.float32))
+    write_manifest(cfg, len(xyz), len(parts), len(ob))
     plot_view(xyz, labels, assets, (0, 1), True, "Front (x vs -y)", out_path(cfg, "segment_front.png"), cfg["plots"])
     plot_view(xyz, labels, assets, (0, 2), False, "Top (x vs z)", out_path(cfg, "segment_top.png"), cfg["plots"])
     print(f"\nEXTRACTED OBJECTS: {len(ob)}  (+{len(assets) - len(ob)} structural)  "

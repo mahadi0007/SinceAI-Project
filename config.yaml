@@ -1,8 +1,8 @@
 # All tunable values. Paths are relative to the repo root.
 paths:
-  ply: data/Equipment Room.ply     # full, uncorrupted capture (old: data/boiler_room.ply = back strip only)
-  xlsx: data/builder_pack.xlsx
-  out_dir: out
+  ply: ../sinceai2026/data/raw/Equipment Room.ply   # original input, read-only (full, uncorrupted capture)
+  xlsx: ../sinceai2026/data/raw/equipment.xlsx      # original input, read-only
+  out_dir: out              # override with env VALMET_OUT (e.g. out_baseline)
 
 scene:                    # measured on Equipment Room.ply (histogram peaks + RANSAC floor fit)
   up_direction: "-y"
@@ -75,17 +75,15 @@ plots:
   structure_color: [0.75, 0.75, 0.75]
 
 label:
-  batch_size: 30            # objects per call
-  # labeling chain: Gemini first (clearly better on equipment in a 30-object comparison), Featherless as
-  # quota fallback. Other AI features use copilot.models (Featherless first).
-  models: [gemini:gemini-3.8-flash, gemini:gemini-3.5-flash, gemini:gemini-3.5-flash-lite,
-           gemini:gemma-4-31b-it, featherless:Qwen/Qwen3-VL-30B-A3B-Instruct]
-  workers: 2                # parallel calls; models come from copilot.models (fallback chain)
+  batch_size: 12            # objects per vision call
+  workers: 1                # one request at a time (paid; budget in copilot.budget)
+  max_batches: 1            # per run; null = all (only after the pilot justifies it)
+  vision_sources: [featherless_vision, gemini_vision]   # label_source values that count as VLM evidence
   min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
   rules_conf: 0.4
   member_dist: 0.03         # full-res splat point -> object if within this of a segmented point
   panel_px: 320             # saved crop panel size
-  send_px: 224              # panel size sent to Gemini
+  send_px: 224              # panel size sent to the VLM
   splat_px: 2               # point radius in px
   context_margin: 0.6
   context_depth: 0.5        # context panel shows only points within this depth of the object
@@ -110,7 +108,9 @@ navgrid:
   auto_start: max_x       # max_x = right end of the strip | min_x | min_z (doorway)
   resample: 0.05
   target:                 # object the faulty asset (P-002) will be placed on
-    object_id: OBJ-0269   # floor pump at the location verified as "pump" (0.9) in the first scan; null = auto
+    point: [-3.1125, 1.1133, -1.8211]   # scene coordinate of the floor pump seen in the first scan (baseline OBJ-0269)
+    point_tol: 0.15       # object box must be within this of the point
+    object_id: null       # OBJ ids shift between segmentation versions; prefer `point`
     prefer_labels: [pump] # if label.py found reachable objects with these labels, pick among them
     prefer_min_conf: 0.8  # only confidently labelled pumps
     label_reach: 1.2      # approach distance allowed for labelled targets (equipment sits in crowded corners)
@@ -121,6 +121,9 @@ navgrid:
 
 mapping:
   seed: 42
+  vision_min_conf: 0.6            # VLM class label must be at least this confident to count as label_match
+  verified_identities: []         # user-confirmed real-scene identities, e.g.
+  #  - {tag: P-002, point: [x, y, z], method: "readable nameplate", confirmed_by: "...", date: "..."}
   target_tag: P-002
   target_asset_id: ASSET-014
   confidence:
@@ -218,19 +221,51 @@ evidence:
   dq_penalty_max: 0.3
 
 copilot:
-  # "<provider>:<model>", tried in order; on quota (429) / overload (503) / gated (403) / retired (404)
-  # the next one is used. After the chain: saved answers (diagnosis cache, label cache).
-  models: [featherless:Qwen/Qwen3-VL-30B-A3B-Instruct,
-           gemini:gemini-3.8-flash, gemini:gemini-3.5-flash, gemini:gemini-3.5-flash-lite,
-           gemini:gemma-4-31b-it]
-  dead_model_skip_s: 600        # skip a quota-exhausted/retired/gated model for this long
+  provider: featherless          # OpenAI-compatible; Gemini removed
+  base_url: https://api.featherless.ai/v1
+  api_key_env: FEATHERLESS_API_KEY
+  model: Qwen/Qwen3.5-397B-A17B  # verified via /v1/models: image_input=true, available_on_current_plan=true
+  pricing_usd_per_mtok: {input: 0.55, output: 3.5}   # from /v1/models (image: 0) - for the usage ledger
   temperature: 0.2
-  expected_latency_s: 60        # drives the viewer progress bar (Featherless Qwen3-VL ~60 s)
-  api_key_env: GEMINI_API_KEY   # for gemini:* entries
-  featherless:                  # OpenAI-compatible, open models, no daily quota (plan concurrency limit)
-    base_url: https://api.featherless.ai/v1
-    api_key_env: FEATHERLESS_API_KEY
-    max_tokens: 4096
-    timeout_s: 240
-    retries_429: 3              # "too many concurrent requests": wait and retry before falling back
-    backoff_s: 10
+  max_tokens: 2000
+  disable_thinking: true         # chat_template_kwargs.enable_thinking=false (bounded output)
+  timeout_s: 180
+  offline: false                 # true (or env VALMET_OFFLINE=1) = caches/templates only, no requests
+  budget:
+    max_paid_requests: 10        # hard cap over the repo's lifetime (ledger). Pilot was 3; raised after the
+                                 # pilot justified expansion (7 more region proposals, ~$0.004 each)
+    ledger: llm_ledger.jsonl
+  expected_latency_s: 25         # drives the viewer's progress bar
+
+repair:                     # boundary repair over baseline leaves (pipeline/repair.py); provisional values,
+  min_object_points: 20     # to be re-tuned only against reviewed examples (review/regions.yaml)
+  geometry:                 # pipe continuity: all must hold; box overlap is never used
+    min_points: 30
+    max_angle_deg: 8        # fitted axes
+    offset_frac: 0.9        # lateral centreline offset (partial surfaces shift centroids) <= offset_frac * half-width + offset_abs
+    offset_abs: 0.015
+    max_thickness_ratio: 1.6
+    max_gap: 0.15           # axial gap
+    barrier_points: 12      # >= this many compact non-pipe points in the gap -> valve/fitting/branch: no join
+    barrier_max_diag: 0.6   # non-pipe leaf counts as a barrier only if valve/fitting sized
+    run_fit_frac: 1.3       # whole joined run: 90th pct lateral residual <= this * half-width + offset_abs
+  context:                  # proposal + SAM mask + visible support
+    min_in_px: 30           # visible pixels inside masks (all views) before an object is considered
+    member_frac: 0.6        # object visible-in-mask share to merge it whole
+    min_split_voxels: 15
+    fill_dist: 0.03         # unobserved voxels next to supported ones (occluded back side)
+    min_candidate_voxels: 25
+    cc_eps: 0.05
+    cc_min_frac: 0.2
+    pipe_protect_min_len: 0.4   # pipe groups at least this long are never merged into / split by context repair
+    max_extent: 1.2         # pump/motor/valve larger than this (units) = implausible join
+    disabled: []            # revert individual repairs, e.g. [RV-06/C1]; rebuild with python -m pipeline.repair
+
+propose:                    # contextual proposals (pipeline/propose.py)
+  seg_dir: out_geo          # segmentation shown in the fragment-ID overlay and used for association
+  sam_model: facebook/sam2.1-hiera-tiny
+  min_sam_score: 0.5
+  box_expand: 0.2          # each side, fraction of the VLM box size (raw box still drawn)
+  min_confidence: 0.5       # VLM confidence to use a candidate for repair
+  depth_gate_min: 0.15      # mask pixels deeper than front + max(min, size_factor * size) are background
+  depth_gate_size: 1.2
