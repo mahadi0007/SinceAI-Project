@@ -1986,9 +1986,13 @@ class Sim:
         """Start state (refresh / new browser): tour route, worker at the door facing straight into the room,
         nothing highlighted, target equipment selected, POV as configured, camera at the start view."""
         self.playing = False
-        if self.tour_route is not None:                 # a layout edit can leave no tour: keep its note
+        if self.tour_route is not None:
             self.set_walk_mode("tour")                  # tour route from the door, dist 0, leaves the target
             self.md_walk.content = ""
+        else:                                           # edited layout without a valid tour (its note stays):
+            self.set_walk_mode("goto")                  # the worker still goes back to the door, standing on a
+            self.set_route(np.stack([self.door_p, self.door_p + self.start_dir * 1e-3]), [])   # route, no stops
+            self.h_path.visible = False
         self.clear_stop_highlight()
         tag = self.target["asset"]["tag"]
         opt = self.equip_opt.get(tag)
