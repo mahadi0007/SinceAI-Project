@@ -5,6 +5,7 @@ Run:    python -m viewer.app      then open http://localhost:8080
 """
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -15,11 +16,12 @@ import viser
 from scipy.spatial import cKDTree
 
 from copilot.agent import diagnose, to_markdown
+from copilot.voice import briefing
 from pipeline.common import load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
 
 Cfg = dict[str, Any]
-IDLE_TEXT = "_Press Play: the copilot starts diagnosing the target while the worker walks._"
+IDLE_TEXT = "_Press Play: the copilot briefs the worker once they stand in front of the target._"
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
 
@@ -141,7 +143,14 @@ class Sim:
         self.playing = False
         self.arrived = False
         self._diag: dict | None = None           # prefetched target diagnosis
-        self._busy = False                       # a copilot job is running
+        self._audio: bytes | None = None         # spoken briefing (mp3) for the target
+        self._prefetching = False                # silent target diagnosis + voice running
+        self._busy = False                       # a manual copilot job is running
+        end_gap = self.box_gap(self.target, self.pts[-1])
+        self.arrive_gap = max(float(cfg["viewer"]["voice"]["arrive_gap"]), end_gap + 0.05)
+        if end_gap > cfg["viewer"]["voice"]["arrive_gap"]:
+            print(f"[viewer] path ends {end_gap:.2f} u from the target box; arrive_gap raised to "
+                  f"{self.arrive_gap:.2f}")
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.selected: dict | None = None
@@ -229,8 +238,11 @@ class Sim:
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
-        tangent = self.tangent()
-        yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> path direction
+        if self.arrived:                                                # face the target
+            tangent = np.array(self.target["center"]) - p
+        else:
+            tangent = self.tangent()
+        yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> facing direction
         self.h_avatar.position = tuple(p)
         self.h_avatar.wxyz = (np.cos(yaw / 2), 0.0, np.sin(yaw / 2), 0.0)
         phase = 2 * np.pi * self.dist / av["stride"]
@@ -303,6 +315,7 @@ class Sim:
             self.b_ask = g.add_button("Ask copilot", color="blue")
             self.md_loading = g.add_markdown("", visible=False)
             self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
+            self.h_audio = g.add_html("", visible=False)          # spoken briefing player
             self.md_copilot = g.add_markdown(IDLE_TEXT)
 
         @b_play.on_click
@@ -320,9 +333,8 @@ class Sim:
 
         @b_reset.on_click
         def _(_e: Any) -> None:
-            self.playing, self.dist, self.arrived = False, 0.0, False
-            if not self._busy:
-                self.md_copilot.content = IDLE_TEXT
+            self.playing, self.dist = False, 0.0
+            self.leave_target()
             self.update()
 
         @self.sl_pos.on_update
@@ -349,6 +361,12 @@ class Sim:
 
     def update(self) -> None:
         p = self.position()
+        at_target = self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
+        if at_target and not self.arrived:
+            self.arrived = True
+            self.on_arrival()
+        elif not at_target and self.arrived:
+            self.leave_target()
         self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1])
         r = float(self.sl_radius.value)
         idx = self.tree.query_ball_point(p[[0, 2]], r + self.max_half)
@@ -367,9 +385,6 @@ class Sim:
             font_screen_scale=1.0 if n["asset"] else self.vc["other_label_scale"])
             for n in show]
         self.md_near.content = nearby_text(mapped, others, r)
-        if self.dist >= self.s[-1] - 1e-6 and not self.arrived:
-            self.arrived = True
-            self.on_arrival()
 
     @staticmethod
     def box_gap(n: dict, p: np.ndarray) -> float:
@@ -459,17 +474,30 @@ class Sim:
         threading.Thread(target=work, daemon=True).start()
 
     def prefetch_diagnosis(self) -> None:
-        """Start the target diagnosis while the avatar walks (LLM takes ~20 s)."""
-        if self._diag is not None or self._busy:
+        """Silently prepare the target diagnosis + spoken briefing while the avatar walks
+        (Featherless ~60 s, TTS a few s). Nothing is shown until the worker stands at the target;
+        if it is still running on arrival, the panel says so and the briefing plays when ready."""
+        if self._diag is not None or self._prefetching:
             return
+        self._prefetching = True
+        tag = self.target["asset"]["tag"]
 
-        def done(d: dict) -> None:
-            self._diag = d
+        def work() -> None:
+            try:
+                d = diagnose(tag, None, self.cfg)
+                _, audio = briefing(d, tag, self.cfg)
+                self._diag, self._audio = d, audio
+            except Exception as e:  # noqa: BLE001 - show it instead of hanging on "preparing"
+                print(f"[viewer] briefing failed: {type(e).__name__}: {e}")
+                if self.arrived:
+                    self.md_copilot.content = (self.arrival_header() + "⚠️ _Briefing failed; use "
+                                               "**Ask copilot** below._")
+                return
+            finally:
+                self._prefetching = False
             if self.arrived:
                 self.show_diagnosis()
-            else:
-                self.md_copilot.content = "✅ _Diagnosis for the target is ready; it opens on arrival._"
-        self.run_job(self.target["asset"]["tag"], None, done)
+        threading.Thread(target=work, daemon=True).start()
 
     def arrival_header(self) -> str:
         a = self.target["asset"]
@@ -479,14 +507,30 @@ class Sim:
                 f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']})_\n\n---\n")
 
     def show_diagnosis(self) -> None:
+        if not self.arrived or self._diag is None:
+            return
         self.md_copilot.content = self.arrival_header() + to_markdown(self._diag)
+        if self._audio:
+            b64 = base64.b64encode(self._audio).decode()
+            self.h_audio.content = (
+                '<div style="font-weight:600;margin:4px 0">🔊 Copilot briefing</div>'
+                f'<audio controls autoplay style="width:100%" src="data:audio/mpeg;base64,{b64}"></audio>')
+            self.h_audio.visible = True
 
     def on_arrival(self) -> None:
         if self._diag is not None:
             self.show_diagnosis()
             return
-        self.md_copilot.content = self.arrival_header()
+        self.md_copilot.content = self.arrival_header() + "_🎧 The copilot is preparing your briefing…_"
         self.prefetch_diagnosis()
+
+    def leave_target(self) -> None:
+        """Worker moved away from the target: stop the briefing and hide it until the next arrival."""
+        self.arrived = False
+        self.h_audio.visible = False
+        self.h_audio.content = ""                                       # removes the <audio>, stops playback
+        if not self._busy:
+            self.md_copilot.content = IDLE_TEXT
 
     def run(self) -> None:
         self.update()

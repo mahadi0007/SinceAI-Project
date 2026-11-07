@@ -202,6 +202,16 @@ viewer:
     degraded: [255, 120, 0]
     attention_required: [255, 0, 0]
     no_record: [0, 220, 255]
+  voice:                    # spoken briefing on arrival (ElevenLabs TTS over the validated diagnosis)
+    enabled: true
+    api_key_env: ELEVENLABS_API_KEY
+    voice_id: JBFqnCBsd6RMkjVDRZzb     # premade "George"; any ElevenLabs voice ID works
+    model_id: eleven_multilingual_v2
+    output_format: mp3_44100_128
+    timeout_s: 30
+    max_checks: 3                      # next safe checks read aloud
+    safety_line: "Site procedures, lockout-tagout and permits apply."
+    arrive_gap: 0.6                    # worker counts as "in front of" the target within this box gap (units)
 
 evidence:
   samples_per_day: 48           # 30-min telemetry
