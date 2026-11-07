@@ -1704,8 +1704,12 @@ class Sim:
             return
         cur = self.layout_hash()
         applied = self.edits.get("applied_layout") or {}
-        if cur != self._nav_layout and cur in (self.base_layout, applied.get("hash")):
-            self._use_nav(None if cur == self.base_layout else self._build_nav(cur))   # back to a built layout
+        if cur != self._nav_layout and cur == self.base_layout:
+            self._use_nav(None)                                         # back to the unedited scene
+        elif cur != self._nav_layout and cur == applied.get("hash"):    # back to the applied layout
+            res = self._try_build_nav(cur)
+            if res is not None:
+                self._use_nav(res)
         why = self.nav_stale()
         if why:
             self.playing = False
@@ -1728,7 +1732,21 @@ class Sim:
                  "✅ Navigation matches this layout." + (" (rebuilt for the edited layout)" if self.nav_inputs else ""))
         self.md_layout.content = (f"{n_moved} moved · {n_rem} removed · {n_copy} copies · "
                                   f"{len(self.edits['history'])} undo steps  \n{state}"
-                                  + (f"  \n⚠️ {self.tour_note}" if getattr(self, "tour_note", "") else ""))
+                                  + (f"  \n⚠️ {self.tour_note}" if getattr(self, "tour_note", "") else "")
+                                  + (f"  \n⚠️ {self.nav_error}" if why and getattr(self, "nav_error", "") else ""))
+
+    def _try_build_nav(self, layout: str) -> dict | None:
+        """_build_nav for the automatic rebuilds (edit callbacks, startup). On failure (missing / stale out/ files)
+        navigation stays marked out of date, so walking remains blocked and the reason is shown; the unedited
+        routes are not used, because they would be stale for this layout."""
+        try:
+            res = self._build_nav(layout)
+        except Exception as e:  # noqa: BLE001 - a broken rebuild must not stop the viewer or an edit
+            self.nav_error = f"Navigation rebuild failed ({type(e).__name__}: {e}); press Apply layout to retry."
+            print(f"[viewer] {self.nav_error}")
+            return None
+        self.nav_error = ""
+        return res
 
     def _build_nav(self, layout: str) -> dict:
         from pipeline.layout_nav import build
@@ -1747,8 +1765,10 @@ class Sim:
         try:
             res = None if cur == self.base_layout else self._build_nav(cur)
         except Exception as e:  # noqa: BLE001
-            self.md_layout.content = f"⚠️ Apply layout failed: {type(e).__name__}: {e}"
+            self.nav_error = f"Apply layout failed: {type(e).__name__}: {e}"
+            self.md_layout.content = f"⚠️ {self.nav_error}"
             return
+        self.nav_error = ""
         if self.layout_hash() != cur:                                   # edited again meanwhile
             self.update_layout_status()
             return
@@ -1804,15 +1824,12 @@ class Sim:
         self.update_layout_status()
 
     def _restore_layout_nav(self) -> None:
-        """At startup: saved edits whose layout was applied get that navigation back; unapplied edits block walking."""
-        self.tour_note = ""
+        """At startup: saved edits whose layout was applied get that navigation back (layout_changed rebuilds it,
+        guarded); unapplied edits, or a rebuild that fails, block walking until Apply layout."""
+        self.tour_note = self.nav_error = ""
         if self.edits is None:
             return
-        cur = self.layout_hash()
-        applied = (self.edits.get("applied_layout") or {}).get("hash")
         self._nav_layout = self.base_layout
-        if cur != self.base_layout and cur == applied:
-            self._use_nav(self._build_nav(cur))
         self.layout_changed()
 
     def export_edited_ifc(self) -> None:
