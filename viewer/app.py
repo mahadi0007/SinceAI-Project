@@ -658,7 +658,6 @@ class Sim:
         with g.add_folder("Clicked object", expand_by_default=False):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            b_fly = g.add_button("Fly to object")
             b_walk_click = g.add_button("Walk to this object")
             self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
@@ -714,11 +713,6 @@ class Sim:
             c = self.rebuild_splats(float(sl_dark.value), bool(cb_crop.value))
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
-
-        @b_fly.on_click
-        def _(e: Any) -> None:
-            if self.selected is not None:
-                self.fly_to(self.selected, e.client)
 
         @b_walk_click.on_click
         def _(_e: Any) -> None:
