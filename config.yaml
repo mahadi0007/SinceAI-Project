@@ -246,12 +246,23 @@ viewer:
   movable_color: [0, 220, 120]  # "Show movable objects" frames (objects in removable_rows.npz)
   duplicate_offset: [0.5, 0.0, 0.5]  # scene units; a copy is placed beside the original
   selected_thickness: 5.0
+  selected_fill_opacity: 0.22  # translucent fill of the selected object (frame + fill in selected_color)
   fly_min_dist: 1.0
   fly_dist_factor: 2.0
   fly_height: 0.3
   path_color: [220, 20, 60]
   avatar:                   # articulated worker; lengths below are for scale 1.0 (~1.73 m at 1 u = 1.15 m)
     scale: 1.0                    # overall size multiplier (1.0 = values below as written)
+    rigged:                       # Mixamo worker (README "Worker avatar"); missing files -> box figure below
+      enabled: true
+      walk_glb: data/avatar/walking.glb   # character + "Walking" (In Place), converted FBX -> GLB
+      idle_glb: data/avatar/idle.glb      # optional idle animation for the same skeleton (without skin)
+      height_m: 1.70
+      size: 1.0                     # visual multiplier on height_m (units_to_m is an estimate);
+                                    # tune live with More -> View -> Worker size
+      cycle_m: 1.35                 # distance covered by one walk-animation cycle (2 steps); sets step timing
+      fps: 30                       # animation sampling rate (idle uses half)
+      skip_parts: [Ch17_Eyelashes]  # tiny/transparent parts not worth a mesh
     hip_h: 0.72
     hip_dx: 0.08
     leg: [0.11, 0.70, 0.13]       # box dims x, length, z
@@ -402,6 +413,9 @@ tour:                       # inspection tour: door -> warning assets (from Exce
   max_stops: 5              # keeps the walk a sensible length for the demo
   reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
   pause_s: 2.0              # viewer pause at each stop
+  brief_at_stops: true      # at each warning stop the copilot speaks its summary; the stop lasts until it ends
+  brief_wait_s: 12          # longest wait for a stop's summary audio to be ready (first time: ElevenLabs call)
+  brief_gap_s: 1.0          # short pause after the summary before walking on
 
 chat:                       # viewer chat: quick commands (free) -> Claude Code headless + our MCP server
   quick_commands: true      # handle "take me to M-006", "show P-005", "start tour", ... locally, instantly

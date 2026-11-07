@@ -41,6 +41,29 @@ TABLE_CSS = """<style>
 [data-mantine-color-scheme="dark"] .mantine-Table-table td { border-color: #4a4f57 !important; }
 [data-mantine-color-scheme="dark"] .mantine-Table-table thead th { background: #2c2f34; }
 [data-mantine-color-scheme="dark"] .mantine-Table-table tbody tr:nth-child(even) td { background: #25272b; }
+/* hover info (viser buttons ignore `hint`, so sections get an ⓘ line that opens an explanation) */
+.vtip { position: relative; display: inline-block; cursor: help; font-size: 0.86em; color: #4c6ef5;
+  margin: 0 0 4px; }
+.vtip .vtip-box { visibility: hidden; opacity: 0; transition: opacity 0.12s ease-out;
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 1000; width: max-content; max-width: 300px;
+  padding: 6px 10px; border-radius: 6px; line-height: 1.35; font-size: 0.95em;
+  background: #25262b; color: #f1f3f5; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); pointer-events: none; }
+.vtip .vtip-box::before { content: ""; position: absolute; top: -5px; left: 12px; border: 5px solid transparent;
+  border-top: 0; border-bottom-color: #25262b; }
+.vtip:hover .vtip-box { visibility: visible; opacity: 1; }
+/* on/off options in the panel (Use POV, Worker view, Show all frames, ...) as toggle switches; viser has no
+   switch widget, so its checkbox is restyled. Panel checkboxes are size "xs" (viser's own settings menu uses
+   "sm" and already has real switches), which keeps that menu unchanged. */
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-inner {
+  width: 36px !important; height: 20px !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-input {
+  appearance: none; width: 36px !important; height: 20px !important; border-radius: 10px !important;
+  border: none !important; cursor: pointer; transition: background 0.15s ease;
+  background: radial-gradient(circle at 10px 50%, #fff 7px, transparent 7.5px), #ced4da !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-input:checked {
+  background: radial-gradient(circle at 26px 50%, #fff 7px, transparent 7.5px),
+              var(--mantine-color-blue-filled, #228be6) !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-icon { display: none !important; }
 </style>"""
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
@@ -99,6 +122,15 @@ def stop_text(stop: dict, i: int, n: int) -> str:
     return (f"**Stop {i}/{n}: {stop['tag']}** · {stop['asset_class']} · {stop['condition_state']} · "
             f"health **{stop['health_score']}** · {stop['issue_code']}"
             + ("  \n_Faulty target: copilot diagnosis below._" if stop["kind"] == "target" else ""))
+
+
+def audio_seconds(audio: bytes, cfg: Cfg) -> float:
+    """Length of a constant-bitrate ElevenLabs mp3, from voice.output_format (e.g. mp3_44100_128 = 128 kbit/s)."""
+    try:
+        kbps = int(str(cfg["viewer"]["voice"]["output_format"]).rsplit("_", 1)[-1])
+    except (KeyError, ValueError):
+        kbps = 128
+    return len(audio) * 8 / (kbps * 1000)
 
 
 def status_of(node: dict) -> str:
@@ -406,6 +438,10 @@ class Sim:
         sc, av = self.server.scene, self.av
         self.h_avatar = sc.add_frame("/avatar", show_axes=False)
         self.h_body = sc.add_frame("/avatar/body", show_axes=False)       # bobs while walking
+        self.h_limbs: dict[str, Any] = {}
+        self.rig = self._load_rigged_avatar()
+        if self.rig is not None:                                          # Mixamo worker replaces the boxes
+            return
         col = {k: tuple(v) for k, v in av["colors"].items()}
         sc.add_box("/avatar/body/torso", col["vest"], tuple(av["torso"]),
                    position=(0, -av["torso_h"], 0))
@@ -415,7 +451,6 @@ class Sim:
                          position=(0, -av["head_h"], 0))
         sc.add_icosphere("/avatar/body/helmet", radius=av["head_r"] * 1.15, color=col["helmet"],
                          position=(0, -(av["head_h"] + av["head_r"] * 0.35), 0), scale=(1, 0.6, 1))
-        self.h_limbs: dict[str, Any] = {}
         for side, sx in (("l", 1), ("r", -1)):
             hip = sc.add_frame(f"/avatar/body/hip_{side}", show_axes=False,
                                position=(sx * av["hip_dx"], -av["hip_h"], 0))
@@ -430,6 +465,25 @@ class Sim:
             sc.add_icosphere(f"/avatar/body/shoulder_{side}/hand", radius=av["arm"][0] * 0.6,
                              color=col["skin"], position=(0, av["arm"][1] + 0.02, 0))
             self.h_limbs[f"hip_{side}"], self.h_limbs[f"shoulder_{side}"] = hip, sh
+
+    def _load_rigged_avatar(self) -> Any:
+        """Mixamo character from data/avatar/*.glb (see README); None -> the box figure is used."""
+        rc = self.av.get("rigged", {})
+        if not rc.get("enabled", True) or not repo_path(rc.get("walk_glb", "")).exists():
+            if rc.get("enabled", True):
+                print(f"[viewer] no {rc.get('walk_glb')} (see README 'Worker avatar'); using the box figure")
+            return None
+        try:
+            from viewer.avatar import RiggedAvatar
+            rc = {**rc, "walk_glb": repo_path(rc["walk_glb"]),
+                  "idle_glb": repo_path(rc["idle_glb"]) if rc.get("idle_glb") else None}
+            up_sign = -1.0 if self.cfg["scene"]["up_direction"].startswith("-") else 1.0
+            rig = RiggedAvatar(self.server, "/avatar/body", rc, self.cfg["scene"]["units_to_m"], up_sign)
+            print(f"[viewer] rigged worker avatar: {len(rig.meshes)} parts, {rc['height_m']} m")
+            return rig
+        except Exception as e:  # noqa: BLE001 - a broken model file must not stop the viewer
+            print(f"[viewer] rigged avatar failed ({type(e).__name__}: {e}); using the box figure")
+            return None
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
@@ -451,6 +505,8 @@ class Sim:
         def rot_x(a: float) -> tuple[float, float, float, float]:
             return (float(np.cos(a / 2)), float(np.sin(a / 2)), 0.0, 0.0)
 
+        if self.rig is not None:                # the rig's own walk/idle animation (run loop) moves the limbs
+            return
         self.h_body.position = (0.0, bob, 0.0)
         self.h_limbs["hip_l"].wxyz, self.h_limbs["hip_r"].wxyz = rot_x(swing), rot_x(-swing)
         self.h_limbs["shoulder_l"].wxyz, self.h_limbs["shoulder_r"].wxyz = rot_x(arm), rot_x(-arm)
@@ -462,26 +518,31 @@ class Sim:
 
     # --- gui ---
     def _build_gui(self) -> None:
-        """Tabs: Equipment (pick → walk → ask copilot; the only thing a field user needs),
-        Inspection tour, More (view settings, clicked-object inspector, boundary-repair review)."""
+        """Tabs: Equipment (pick → data, spoken summary, ask the copilot), Walk (to equipment, to a clicked
+        object, inspection tour), Ask the MCP (chat), More (view settings, inspector, boundary-repair review)."""
         g = self.server.gui
         g.configure_theme(control_width="large")         # room for the asset card's tables
         g.add_html(TABLE_CSS)                             # grid lines for every markdown table in the panel
         g.add_markdown("## Valmet Field Copilot")
+        # Viser has no API to change the active tab; updating this (invisible) snippet makes every open
+        # browser click the named tab. Outside the tab group, so it is always mounted.
+        self.h_tabjs = g.add_html("")
+        self._tab_seq = 0
+        self._equipment_options()                          # shared by the Walk and Info pickers
         tabs = g.add_tab_group()
-        with tabs.add_tab("Equipment", icon="tool"):
+        with tabs.add_tab("Walk", icon="walk"):
+            self._build_walk_tab(g)
+        with tabs.add_tab("Info", icon="info-circle"):
             self._build_equipment_tab(g)
         with tabs.add_tab("Ask the MCP", icon="messages"):
             self._build_chat_gui(g)
-        with tabs.add_tab("Inspection tour", icon="route"):
-            self._build_tour_tab(g)
         if self.movable:
             with tabs.add_tab("Edit scene", icon="arrows-move"):
                 self._build_edit_tab(g)
         with tabs.add_tab("More", icon="settings"):
             self._build_more_tab(g)
 
-    # Equipment tab: the main flow
+    # Info tab (equipment information): the main flow
     def _equipment_options(self) -> None:
         order = {"attention_required": 0, "degraded": 1, "watch": 2, "healthy": 3}
         assets = sorted((n for n in self.nodes if n["asset"]),
@@ -497,52 +558,117 @@ class Sim:
         return self.equip_node[self.dd_equip.value]
 
     def _build_equipment_tab(self, g: Any) -> None:
-        self._equipment_options()
         self.dd_equip = g.add_dropdown("Equipment", list(self.equip_node),
                                        initial_value=self.equip_opt[self.target["asset"]["tag"]],
-                                       hint="Sorted by condition: most urgent first. Clicking equipment in the "
-                                            "3D view selects it here too.")
-        b_walk = g.add_button("Walk to equipment", color="blue", icon="walk")
-        self.b_ask = g.add_button("Ask what you want to know", color="green", icon="message-chatbot")
-        self.md_walk = g.add_markdown("")
+                                       hint="Sorted by condition: most urgent first. Picking one shows its "
+                                            "information and walks the worker there.")
+        self.b_ask = g.add_button("Ask what you want to know", color="green", icon="message-chatbot",
+                                  hint="Ask the copilot anything about this equipment (1 live AI request).")
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
         self.h_audio = g.add_html("", visible=False)          # spoken briefing player
         self.md_copilot = g.add_markdown("")
+        self.img_obj = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)   # scan crop (no-record objects)
         icons = dict(zip(DETAIL_SECTIONS, ("📇", "📈", "🔔", "🔧", "🗂️", "📄", "⚠️", "📍")))
         self.md_details: dict[str, Any] = {}
+        self.detail_folders: list[Any] = []
         for name in DETAIL_SECTIONS:                              # full data, one collapsible table each
-            with g.add_folder(f"{icons[name]} {name}", expand_by_default=False):
+            with g.add_folder(f"{icons[name]} {name}", expand_by_default=False) as fo:
                 self.md_details[name] = g.add_markdown("")
+            self.detail_folders.append(fo)
         self._load_token = 0
         self.load_equipment()
 
         @self.dd_equip.on_update
-        def _(_e: Any) -> None:
+        def _(e: Any) -> None:
             self.load_equipment()
-
-        @b_walk.on_click
-        def _(_e: Any) -> None:
-            self.go_to(self.selected_equipment())
+            if e.client is not None:                    # picked by a person (tour/walk/click selections have no
+                self.go_to(self.selected_equipment())   # client): the worker walks there as well
 
         @self.b_ask.on_click
         def _(e: Any) -> None:
             self.open_question_dialog(e.client)
 
+    @staticmethod
+    def _tip(g: Any, text: str, label: str = "What does this do?") -> Any:
+        """Hover-to-explain line (styles in TABLE_CSS)."""
+        import html as _html
+        return g.add_html(f'<div class="vtip">ⓘ {_html.escape(label)}'
+                          f'<div class="vtip-box">{_html.escape(text)}</div></div>')
+
+    def _build_walk_tab(self, g: Any) -> None:
+        """Three ways to move the worker; every control explains itself in a hover tooltip."""
+        g.add_markdown("**There are three options to move the worker. Choose one of them.**  \n"
+                       "Hover **ⓘ** for a short explanation.")
+        self.cb_walk_pov = g.add_checkbox("Use POV", False,
+                                          hint="See the walk through the worker's eyes. Switch off to get your own "
+                                               "camera back.")
+        self.md_walk = g.add_markdown("")                           # walking to / arrived at (all modes)
+        with g.add_folder("① Select equipment"):
+            self._tip(g, "Pick any equipment from the dropdown and press 'Walk to equipment'")
+            self.dd_walk = g.add_dropdown(
+                "Equipment", list(self.equip_node), initial_value=self.equip_opt[self.target["asset"]["tag"]],
+                hint="Every equipment from the Excel pack, most urgent first.")
+            b_walk = g.add_button(
+                "Walk to equipment", color="blue", icon="walk",
+                hint="The worker walks from where it stands to the chosen equipment on a collision-free path, "
+                     "turns to face it and its data opens in the Info tab.")
+        with g.add_folder("② Click an object"):
+            self._tip(g, "Click anything in the 3D scene (pump, valve, ladder, cabinet, ...), then press "
+                         "'Walk to clicked object'")
+            self.md_clicked = g.add_markdown("_Nothing selected: click any object in the 3D view._")
+            b_walk_click = g.add_button(
+                "Walk to clicked object", color="blue", icon="hand-click",
+                hint="Click anything in the 3D scene (pump, valve, ladder, cabinet, ...) and press this: the "
+                     "worker walks to it. Works for objects without an Excel record too.")
+        with g.add_folder("③ Inspection tour"):
+            self._tip(g, "A full inspection round: from the door past every equipment with a warning, pausing at "
+                         "each to show its status, ending at the faulty pump where the copilot gives a spoken "
+                         "briefing. Play / Pause starts or pauses it, Reset goes back to the door.")
+            self._build_tour_tab(g)
+
+        @self.dd_walk.on_update
+        def _(_e: Any) -> None:
+            self.mark_selected(self.equip_node[self.dd_walk.value])
+
+        @b_walk.on_click
+        def _(_e: Any) -> None:
+            self.go_to(self.equip_node[self.dd_walk.value])
+            if self.playing:                                    # walk started: its information meanwhile
+                self.show_tab("Info")
+
+        @b_walk_click.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                self.md_walk.content = "⚠️ Click an object in the 3D view first, then press **Walk to clicked object**."
+                return
+            self.go_to(self.selected)
+            if self.playing:
+                if not self.selected.get("asset"):
+                    self.show_object(self.selected)                # no Excel record: its 3D information
+                self.show_tab("Info")
+
     def choose_equipment(self, tag: str) -> None:
-        """Select equipment in the Equipment tab (from a click, a walk or the tour) and load its data."""
+        """Select equipment in the Info tab (from a click, a walk or the tour) and load its data."""
         opt = self.equip_opt.get(tag)
+        if opt and getattr(self, "dd_walk", None) is not None and self.dd_walk.value != opt:
+            self.dd_walk.value = opt                               # keep the Walk tab's picker in sync
         if opt and self.dd_equip.value != opt:
             self.dd_equip.value = opt
             self.load_equipment()
 
-    def load_equipment(self, speak: bool = True) -> None:
+    @staticmethod
+    def summary_opener(tag: str) -> str:
+        return f"Copilot summary for {tag}."
+
+    def load_equipment(self, speak: bool = True, on_spoken: Any = None) -> None:
         """Show the selected equipment's status + copilot diagnosis automatically, without spending credits:
         the saved AI answer when one exists for the same evidence, else the template from the Excel evidence.
         Then the copilot reads its summary aloud (ElevenLabs; cached per text, so repeats are free)."""
         n = self.selected_equipment()
         tag = n["asset"]["tag"]
         if self.arrived and n is self.target:                 # the tour's spoken briefing owns the panel
+            self.mark_selected(n)
             self.fill_details(n)
             self.show_diagnosis()
             return
@@ -550,6 +676,8 @@ class Sim:
         token = self._load_token
         self.md_copilot.content = f"_Loading {tag}…_"
         self.set_audio(None)                                   # stop the previous equipment's summary
+        self.set_object_view(False)
+        self.mark_selected(n)
         self.fill_details(n)
 
         def current() -> bool:
@@ -565,11 +693,48 @@ class Sim:
             if not current():
                 return
             self.md_copilot.content = text
+            audio = None
             if speak and d is not None:
-                _, audio = briefing(d, tag, self.cfg, opener=f"Copilot summary for {tag}.")
+                _, audio = briefing(d, tag, self.cfg, opener=self.summary_opener(tag))
                 if current():
                     self.set_audio(audio, f"🔊 Copilot summary · {tag}")
+            if on_spoken is not None and current():
+                on_spoken(audio)
         threading.Thread(target=work, daemon=True).start()
+
+    def show_tab(self, label: str) -> None:
+        """Switch every open browser to the tab with this label (see h_tabjs)."""
+        self._tab_seq += 1
+        # Mantine tabs ignore a bare .click(); they need the full pointer/mouse sequence a real click produces.
+        js = ("for(const t of document.querySelectorAll('[role=tab]')){if(t.innerText.trim()==='%s'){"
+              "for(const y of ['pointerdown','mousedown','pointerup','mouseup','click']){"
+              "t.dispatchEvent(new (y.startsWith('pointer')?PointerEvent:MouseEvent)(y,{bubbles:true,"
+              "cancelable:true,button:0,pointerType:'mouse',isPrimary:true}));}break;}}" % label)
+        self.h_tabjs.content = (f'<img alt="" style="display:none" data-seq="{self._tab_seq}" '
+                                f'src="data:image/gif;base64,invalid{self._tab_seq}" onerror="{js}">')
+
+    def set_object_view(self, on: bool) -> None:
+        """Info tab shows a plain scene object (no Excel record): hide the equipment-only sections."""
+        for fo in self.detail_folders:
+            fo.visible = not on
+        self.b_ask.visible = not on                            # the copilot answers about Excel equipment only
+        if not on:
+            self.img_obj.visible = False
+
+    def show_object(self, n: dict) -> None:
+        """All we know about a scene object without an Excel record: label, size, scan points, crop image."""
+        self._load_token += 1                                  # cancels a pending equipment load
+        self.set_audio(None)
+        self.set_object_view(True)
+        self.md_copilot.content = (selection_text(n, self.cfg["scene"]["units_to_m"])
+                                   + "\n\n_Pick an equipment in the dropdown above to see Excel data._")
+        crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
+        if crop.exists():
+            from PIL import Image
+            self.img_obj.image = np.asarray(Image.open(crop).convert("RGB"))
+            self.img_obj.visible = True
+        else:
+            self.img_obj.visible = False
 
     def fill_details(self, n: dict) -> None:
         """Full Excel + 3D record of the equipment in the collapsible tables (fast: Excel is cached)."""
@@ -582,7 +747,7 @@ class Sim:
             md.content = det.get(k, "")
 
     def set_audio(self, audio: bytes | None, caption: str = "") -> None:
-        """Show (and autoplay) an mp3 in the Equipment tab, or remove the player (stops playback)."""
+        """Show (and autoplay) an mp3 in the Info tab, or remove the player (stops playback)."""
         if not audio:
             self.h_audio.visible = False
             self.h_audio.content = ""
@@ -635,19 +800,16 @@ class Sim:
     # Inspection tour tab
     def _build_tour_tab(self, g: Any) -> None:
         if self.tour:
-            route = " → ".join(["door"] + [s["tag"] for s in self.stops])
-            mode = "from Excel status" if self.tour["mode"] == "auto_excel" else "manual list"
-            skipped = ", ".join(f"{s['tag']}" for s in self.tour["skipped"]) or "none"
-            g.add_markdown(f"Walks past the warning assets and ends at the faulty **{self.target['asset']['tag']}**, "
-                           f"where the copilot briefs the worker (spoken).  \nRoute ({mode}): {route} · "
-                           f"{self.tour['length'] * self.cfg['scene']['units_to_m']:.0f} m · skipped: {skipped}")
-        b_play = g.add_button("Play / Pause", color="blue", icon="player-play")
-        b_reset = g.add_button("Reset", icon="refresh")
-        self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
+            g.add_markdown("Walks past all the warning assets")
+        b_play = g.add_button(
+            "Play / Pause", color="blue", icon="player-play",
+            hint="Start the inspection round: from the door past every equipment with a warning (pausing at each), "
+                 "ending at the faulty pump with a spoken copilot briefing. Press again to pause.")
+        b_reset = g.add_button("Reset", icon="refresh", hint="Back to the door, tour from the start.")
+        self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0,
+                                   hint="Drag to move the worker along the route (pauses are skipped).")
         self.md_stop = g.add_markdown("_Press Play to start the tour._" if self.tour
                                       else "_No tour: run `python -m pipeline.tour`._")
-        with g.add_folder("Nearby assets", expand_by_default=False):
-            self.md_near = g.add_markdown("")
 
         @b_play.on_click
         def _(_e: Any) -> None:
@@ -661,6 +823,7 @@ class Sim:
             if self.playing:                    # resume the stop pause where it was frozen
                 self.pause_until = now + self.pause_left if self.stop_active is not None else 0.0
                 self.prefetch_diagnosis()
+                self.prefetch_stop_briefings()
             else:
                 self.pause_left = max(0.0, self.pause_until - now)
                 self.blink_stop(0.0)            # freeze the stop highlight in its visible state
@@ -694,7 +857,12 @@ class Sim:
         with g.add_folder("View"):
             self.cb_pov = g.add_checkbox("Worker view (POV)", False,
                                          hint="See the room through the worker's eyes; turns with the worker. "
-                                              "Untick to get your own camera back.")
+                                              "Switch off to get your own camera back.")
+            self.sl_size = g.add_slider("Worker size", 0.5, 1.2, 0.05,
+                                        self.rig.size if self.rig is not None else 1.0,
+                                        visible=self.rig is not None,
+                                        hint="Scales the worker to fit the room (the scan's metre scale is an "
+                                             "estimate). Set the default in viewer.avatar.rigged.size.")
             self.sl_speed = g.add_slider("Walk speed (u/s)", 0.1, 2.0, 0.1, self.vc["walk_speed"])
             self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
             self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
@@ -710,7 +878,6 @@ class Sim:
         with g.add_folder("Clicked object", expand_by_default=False):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            b_walk_click = g.add_button("Walk to this object")
             self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Boundary repair: before / after", expand_by_default=False):
@@ -735,7 +902,17 @@ class Sim:
 
         @self.cb_pov.on_update
         def _(_e: Any) -> None:
+            self.cb_walk_pov.value = self.cb_pov.value
             self.set_pov(self.cb_pov.value)
+
+        @self.cb_walk_pov.on_update
+        def _(_e: Any) -> None:
+            self.cb_pov.value = self.cb_walk_pov.value              # runs set_pov via the handler above
+
+        @self.sl_size.on_update
+        def _(_e: Any) -> None:
+            if self.rig is not None:
+                self.rig.set_size(float(self.sl_size.value))
 
         @self.dd_labels.on_update
         def _(_e: Any) -> None:
@@ -772,12 +949,6 @@ class Sim:
             c = self.rebuild_splats(float(sl_dark.value), bool(cb_crop.value))
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
-        @b_walk_click.on_click
-        def _(_e: Any) -> None:
-            if self.selected is None:
-                self.md_identify.content = "⚠️ Click an object in the 3D view first."
-                return
-            self.go_to(self.selected)
 
         @self.b_identify.on_click
         def _(_e: Any) -> None:
@@ -923,7 +1094,6 @@ class Sim:
             position=(n["center"][0], n["bbox_min"][1], n["center"][2]), anchor="bottom-center",
             font_screen_scale=1.0 if n["asset"] else self.vc["other_label_scale"])
             for n in show]
-        self.md_near.content = nearby_text(mapped, others, r)
 
     def warning_stop_due(self) -> bool:
         """True while a tour warning stop is shown, or (during playback) still due at this spot.
@@ -974,6 +1144,21 @@ class Sim:
         if n is not None:
             self.select(n, inst=self._picked_inst)
 
+    def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
+        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour.
+        segs: the object's current box edges (a moved instance); default = its box in the scan."""
+        if segs is None:
+            segs, _ = edges_for([n], self.vc["colors"])
+        col = np.array(self.vc["selected_color"], np.uint8)
+        self.h_selected.points = segs
+        self.h_selected.colors = np.tile(col, (len(segs), 2, 1))
+        pts = np.asarray(segs).reshape(-1, 3)
+        lo, hi = pts.min(0), pts.max(0)
+        pad = self.vc["stop_fill_pad"]
+        self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
+            "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
+            opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
+
     def select(self, n: dict, inst: str | None = None) -> None:
         self.selected = n
         self.sel_inst = inst if inst is not None or n["id"] not in self.movable else n["id"]
@@ -981,11 +1166,7 @@ class Sim:
         if self.movable:
             self.md_edit.content = (f"**{self.sel_inst}** selected." if self.sel_inst else
                                     "_This object can't be edited; pick one of the movable objects._")
-        segs, _ = edges_for([n], self.vc["colors"])
-        if self.sel_inst:
-            segs = self.inst_box(self.sel_inst)
-        self.h_selected.points = segs
-        self.h_selected.colors = np.tile(np.array(self.vc["selected_color"], np.uint8), (len(segs), 2, 1))
+        self.mark_selected(n, self.inst_box(self.sel_inst) if self.sel_inst else None)
         self.md_sel.content = selection_text(n, self.cfg["scene"]["units_to_m"])
         crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
         if crop.exists():
@@ -995,7 +1176,9 @@ class Sim:
         else:
             self.img_sel.visible = False
         self.md_identify.content = ""
-        if n["asset"]:                                               # clicked equipment -> Equipment tab
+        what = f"**{n['asset']['tag']}** ({n['label']})" if n["asset"] else f"**{n['id']}** · {n['label']} (no Excel record)"
+        self.md_clicked.content = f"Selected: {what}"
+        if n["asset"]:                                               # clicked equipment -> Info tab
             self.choose_equipment(n["asset"]["tag"])
 
     # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
@@ -1162,7 +1345,8 @@ class Sim:
         p = self.position()
         up = np.array([0.0, -1.0, 0.0])                                 # scene up = -y
         f = getattr(self, "_facing", self.tangent())
-        eye = p + up * (self.av["head_h"] + float(self.h_body.position[1])) + f * pc["eye_forward"]
+        eye_h = 0.94 * self.rig.height_units if self.rig is not None else self.av["head_h"]
+        eye = p + up * (eye_h + float(self.h_body.position[1])) + f * pc["eye_forward"]
         focus = self.face_target if self.face_target is not None else (
             np.array(self.target["center"]) if self.arrived else None)
         if focus is not None:
@@ -1269,12 +1453,15 @@ class Sim:
     def show_diagnosis(self) -> None:
         if not self.arrived or self._diag is None:
             return
+        self.set_object_view(False)
         tag = self.target["asset"]["tag"]
         self.md_copilot.content = f"#### 📍 Arrived at {tag}\n\n" + self.equipment_view(tag, self._diag)
         if self._audio:
             self.set_audio(self._audio, f"🔊 Copilot briefing · {tag}")
 
     def on_arrival(self) -> None:
+        if self.walk_mode == "tour":
+            self.show_tab("Info")
         self.choose_equipment(self.target["asset"]["tag"])
         if self._diag is not None:
             self.show_diagnosis()
@@ -1296,6 +1483,7 @@ class Sim:
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
         self._init_remote()
+        last_dist = self.dist
         while True:
             now = time.time()
             self.poll_remote(now)
@@ -1312,6 +1500,12 @@ class Sim:
                     self.reach_stop(self.next_stop)
                 if self.dist >= self.s[-1] and self.next_stop >= len(self.stops):
                     self.playing = False                               # end reached and every stop visited
+            if self.rig is not None:                                   # walk while moving, else breathe
+                if self.dist != last_dist:
+                    self.rig.walk(self.dist)
+                else:
+                    self.rig.idle(now)
+                last_dist = self.dist
             if self.cb_pov.value:                                      # every tick, so turns finish smoothly
                 self.update_pov()                                      # even while paused at a stop
             time.sleep(dt)
@@ -1323,12 +1517,54 @@ class Sim:
         self.highlight_stop(st)
         if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
             self.md_walk.content = (f"✅ **Arrived at {stop_title(st)}**" + (
-                "  \nIts data is below; **Ask what you want to know** for more." if st["has_asset"]
+                "  \nIts data is in the **Info** tab." if st["has_asset"]
                 else "  \n_No asset record: this object is not in the Excel pack._"))
             return
         self.md_stop.content = stop_text(st, k + 1, len(self.stops))
         if st["kind"] != "target":
-            self.pause_until = time.time() + float(self.tour["pause_s"])
+            tc = self.cfg["tour"]
+            if tc.get("brief_at_stops", True) and st.get("has_asset", True) and st["tag"] in self.equip_opt:
+                self.md_stop.content += "  \n_🔊 Copilot summary…_"
+                self.pause_until = time.time() + float(tc.get("brief_wait_s", 12))   # until the audio is ready
+                self.brief_stop(st["tag"])
+            else:
+                self.pause_until = time.time() + float(self.tour["pause_s"])
+
+    def brief_stop(self, tag: str) -> None:
+        """Select the stop's equipment (Info tab follows) and play its spoken copilot summary;
+        the pause then lasts as long as the audio (the target P-002 has its own arrival briefing)."""
+        opt = self.equip_opt[tag]
+        if self.dd_walk.value != opt:
+            self.dd_walk.value = opt
+        if self.dd_equip.value != opt:
+            self.dd_equip.value = opt
+        self.load_equipment(speak=True, on_spoken=lambda audio: self._stop_brief_ready(tag, audio))
+        self.show_tab("Info")
+
+    def _stop_brief_ready(self, tag: str, audio: bytes | None) -> None:
+        if self.walk_mode != "tour" or not self.stop_active or self.stop_active.get("tag") != tag:
+            return                                                  # the worker already moved on / reset
+        tc = self.cfg["tour"]
+        hold = audio_seconds(audio, self.cfg) + float(tc.get("brief_gap_s", 1.0)) if audio else float(tc["pause_s"])
+        hold = max(hold, float(tc["pause_s"]))
+        if self.playing:
+            self.pause_until = time.time() + hold
+        else:                                                       # tour paused meanwhile: resume will use it
+            self.pause_left = hold
+
+    def prefetch_stop_briefings(self) -> None:
+        """Warm the spoken summaries of all tour stops (ElevenLabs once per text; cached after)."""
+        tags = [st["tag"] for st in self.stops if st.get("kind") != "target" and st["tag"] in self.equip_opt]
+
+        def work() -> None:
+            for tag in tags:
+                try:
+                    briefing(diagnose(tag, None, self.cfg, allow_paid=False), tag, self.cfg,
+                             opener=self.summary_opener(tag))
+                except Exception as e:  # noqa: BLE001 - the stop falls back to a plain pause
+                    print(f"[viewer] stop briefing {tag} failed: {type(e).__name__}: {e}")
+        if tags and self.cfg["tour"].get("brief_at_stops", True):
+            threading.Thread(target=work, daemon=True).start()
 
     # --- routes: inspection tour vs. go to one equipment ---
     def _build_chat_gui(self, g: Any) -> None:

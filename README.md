@@ -61,6 +61,32 @@ python -m viewer.app            # open http://localhost:8080 and press Play
 - Current results on Equipment Room: 936 objects, 935 named by Gemini vision, a 3.2-unit collision-free walk to P-002.
 - Gemini models are tried in the order of `copilot.models`. On quota, overload or retired-model errors the next model is used. If all fail, the copilot shows the last good answer (marked as cached) or a template built from the same evidence.
 
+## Worker avatar (optional, Mixamo)
+
+With `data/avatar/walking.glb` present the viewer shows a rigged construction worker that walks
+(steps timed to the walked distance) and breathes while standing; without it, the box figure is used.
+Mixamo's terms don't allow sharing the raw files and this repo is public, so each teammate downloads them
+(free Adobe login, ~5 minutes):
+
+1. On mixamo.com pick the construction worker (hi-vis vest + helmet, Mixamo `Ch17`).
+2. Animations → **Walking**, tick **In Place** → Download: FBX Binary, **With Skin**, 30 fps,
+   no keyframe reduction → save as `data/avatar/walking.fbx`.
+3. Optional: **Breathing Idle**, same settings but **Without Skin** → `data/avatar/idle.fbx`.
+4. Convert FBX → GLB with Facebook's FBX2glTF (BSD), in any scratch folder:
+   ```bash
+   npm install fbx2gltf@0.9.7-p1
+   B=node_modules/fbx2gltf/bin/Darwin/FBX2glTF        # Linux: bin/Linux/FBX2glTF, Windows: bin/Windows_NT/FBX2glTF.exe
+   $B --binary --input <repo>/data/avatar/walking.fbx --output <repo>/data/avatar/walking
+   $B --binary --input <repo>/data/avatar/idle.fbx    --output <repo>/data/avatar/idle
+   ```
+   The macOS binary is Intel-only: on Apple Silicon install Rosetta once
+   (`softwareupdate --install-rosetta --agree-to-license`). Blender (import FBX, export glTF Binary with
+   animations) works too.
+
+Settings: `viewer.avatar.rigged` in `config.yaml` (height, step length per walk cycle, parts to skip,
+`enabled: false` for the box figure). Code: `viewer/avatar.py` (GLB reader with numpy only, forward kinematics
+baked at load, one Viser skinned mesh per character part, coloured from its texture).
+
 ## Boundary repair (Nov 2026)
 
 LLM provider is Featherless (`Qwen/Qwen3.5-397B-A17B`, OpenAI-compatible, `copilot/llm.py`) with a hard paid-request cap and
