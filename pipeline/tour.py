@@ -197,7 +197,34 @@ class WalkPlanner:
     def __init__(self, cfg: Cfg) -> None:
         self.cfg = cfg
         self.grid, self.layers, _, _ = load_inputs(cfg)
+        self.base = {k: v.copy() for k, v in self.layers.items()}     # the scan as captured (before edits)
         self.walk = self.layers["walkable"]
+
+    def _cells(self, fp: tuple[float, float, float, float]) -> tuple[slice, slice]:
+        x0, x1, z0, z1 = fp
+        (i0, i1), (k0, k1) = self.grid.index(np.array([x0, x1]), np.array([z0, z1]))
+        return (slice(max(int(i0), 0), min(int(i1) + 1, self.grid.nx)),
+                slice(max(int(k0), 0), min(int(k1) + 1, self.grid.nz)))
+
+    def apply_edits(self, clear: list[tuple[float, float, float, float]],
+                    block: list[tuple[float, float, float, float]]) -> None:
+        """Scene edits in the viewer: x-z footprints to free (where moved/removed objects stood; the floor is
+        assumed to continue underneath) and to block (where objects stand now). Rebuilds the inflated grid
+        exactly like navgrid.py, so routes keep the same clearance rules."""
+        from pipeline.navgrid import inflate, largest_component
+        obst, floor = self.base["obstacles"].copy(), self.base["floor"].copy()
+        for fp in clear:
+            sx, sz = self._cells(fp)
+            obst[sx, sz] = False
+            floor[sx, sz] = True
+        for fp in block:
+            sx, sz = self._cells(fp)
+            obst[sx, sz] = True
+        inflated, clearance = inflate(obst, self.cfg["navgrid"]["avatar_radius"], self.grid.cell)
+        walk = largest_component(floor & ~inflated)
+        self.layers = {**self.layers, "obstacles": obst, "floor": floor, "inflated": inflated,
+                       "clearance": clearance, "walkable": walk}
+        self.walk = walk
 
     def to_object(self, start_x: float, start_z: float, node: dict) -> dict:
         name = node["asset"]["tag"] if node.get("asset") else f"{node['id']} ({node['label']})"
