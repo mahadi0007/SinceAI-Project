@@ -13,11 +13,13 @@ All tunable values are in `config.yaml`.
 | Stage | Module | Output |
 |---|---|---|
 | 1. Segmentation | `pipeline/segment.py`: voxel + outlier removal, normal-checked floor/ceiling/wall removal, DBSCAN, direction-class split of pipe networks, collinear pipe merge | `assets.json` (936 objects with 3D boxes) |
-| 2. Labeling | `pipeline/label.py`: renders each object (front, side, context) and labels it zero-shot with Gemini vision from a fixed vocabulary, falling back to geometry rules | `assets_labeled.json`, `crops/`, `label_contact_sheet.png` |
+| 2. Labeling | `pipeline/label.py`: renders each object (front, side, context) and labels it zero-shot with a vision LLM (Featherless Qwen3.5) from a fixed vocabulary, falling back to geometry rules | `assets_labeled.json`, `crops/`, `label_contact_sheet.png` |
 | 3. Navigation | `pipeline/navgrid.py`: x–z occupancy grid, obstacles inflated by avatar radius, A*, line-of-sight smoothing, clearance check | `path.json`, `navgrid.png` |
 | 4. Mapping | `pipeline/mapping.py`: Excel assets → objects (label match, geometry rule, seeded fallback) with explicit confidence | `scene_graph.json`, `scene_anchors.csv` |
-| 5. Copilot | `copilot/evidence.py` builds the evidence pack; `copilot/agent.py` runs Gemini under the DOC-RAG-GUIDE + DOC-FIELD-SAFETY rules, then checks every cited ID | `diagnosis_<tag>.json` |
-| 6. Viewer | `viewer/app.py`: Viser scene with splats, frames, walking worker, proximity panel, click-to-inspect, copilot panel; on arrival the worker faces the target and `copilot/voice.py` reads the validated diagnosis aloud (ElevenLabs) | http://localhost:8080 |
+| 5. Tour | `pipeline/tour.py`: inspection tour door -> warning assets (Excel `Current_State`) -> faulty target | `tour.json`, `tour.png` |
+| 6. Copilot | `copilot/evidence.py` builds the evidence pack; `copilot/agent.py` runs the LLM (`copilot/llm.py`) under the DOC-RAG-GUIDE + DOC-FIELD-SAFETY rules, then checks every cited ID | `diagnosis_<tag>.json` |
+| 7. BIM | `pipeline/export_ifc.py`: scene graph -> IFC4 model (fitted pipes, catalog equipment, scan meshes, Excel data in `Pset_ValmetAsset`) plus per-point deviation from the scan | `scene.ifc`, `deviation.npz` |
+| 8. Viewer | `viewer/app.py`: Viser scene with tabs Scene / Walk / Info / Edit / Ask; Scan, BIM or Overlay display, walking worker, click-to-inspect, movable objects; on arrival the worker faces the target and `copilot/voice.py` reads the validated diagnosis aloud (ElevenLabs) | http://localhost:8080 |
 
 ## Setup
 
@@ -27,8 +29,8 @@ python -m venv .venv            # Python 3.12 tested
 cp .env.example .env            # put your FEATHERLESS_API_KEY (and optional ELEVENLABS_API_KEY) in .env
 ```
 
-Put the challenge files in `data/` (not in git):
-`data/Equipment Room.ply` (full, uncorrupted scan) and `data/builder_pack.xlsx`.
+The challenge files are not in git. Point `paths.ply` and `paths.xlsx` in `config.yaml` at them
+(default: `../sinceai2026/data/raw/Equipment Room.ply` and `../sinceai2026/data/raw/equipment.xlsx`).
 The older `boiler_room.ply` is the same room but only the back strip (2/3 of its rows are corrupted);
 it still works by switching `paths.ply` and the `scene`/`known_planes` values in `config.yaml`.
 
@@ -41,15 +43,17 @@ python -m pipeline.propose RV-01 all                   # per review region: rend
 python -m pipeline.repair context                      # geometry + context repairs -> out/ (repairs.json, reversible)
 python -m pipeline.evaluate out_baseline out_geo out   # reviewed references in review/regions.yaml
 python -m pipeline.compare                             # before/after images -> out_review/compare/
-python -m pipeline.label        # --rules-only: no requests (paid budget: copilot.budget)
+python -m pipeline.label        # --rules-only: no requests; --batches N: paid batches this run (budget: copilot.budget)
 python -m pipeline.navgrid
 python -m pipeline.mapping
+python -m pipeline.tour
 python -m copilot.agent P-002   # optional: diagnosis from the command line
 python -m copilot.voice --dummy --play   # test the ElevenLabs voice with a sample diagnosis (no LLM/data)
 python -m copilot.voice P-002   # optional: build/cache the spoken briefing (out/voice_cache/)
 VALMET_OUT=out_geo python -m pipeline.export_ifc     # IFC/BIM model with scan meshes + deviation -> scene.ifc
 VALMET_OUT=out_geo python -m viewer.removable   # objects that can be moved/removed/duplicated (viewer.removable.include)
 python -m viewer.app            # open http://localhost:8080 and press Play
+python -m viewer.bim_view       # optional: standalone IFC + splat editor (http://localhost:8090)
 ```
 
 ## Notes
@@ -58,8 +62,7 @@ python -m viewer.app            # open http://localhost:8080 and press Play
 - The up axis is −Y (Equipment Room: floor y = 1.174, ceiling y = −0.863, walls at x = −4.67 / 3.73, z = −3.76 / 3.14).
   Native coordinates are kept, and the walking plane is x–z.
 - Navigation uses the observed floor (`navgrid.floor_fill: observed`) and starts at the door in the back wall.
-- Current results on Equipment Room: 936 objects, 935 named by Gemini vision, a 3.2-unit collision-free walk to P-002.
-- Gemini models are tried in the order of `copilot.models`. On quota, overload or retired-model errors the next model is used. If all fail, the copilot shows the last good answer (marked as cached) or a template built from the same evidence.
+- Baseline segmentation on Equipment Room: 936 objects (`review/RESULTS.md`).
 
 ## Worker avatar (optional, Mixamo)
 
@@ -84,7 +87,7 @@ Mixamo's terms don't allow sharing the raw files and this repo is public, so eac
    animations) works too.
 
 Settings: `viewer.avatar.rigged` in `config.yaml` (height, step length per walk cycle, parts to skip,
-`enabled: false` for the box figure). Code: `viewer/avatar.py` (GLB reader with numpy only, forward kinematics
+`enabled: false` for the box figure; live size: Scene tab -> Advanced -> Worker -> Worker size). Code: `viewer/avatar.py` (GLB reader with numpy only, forward kinematics
 baked at load, one Viser skinned mesh per character part, coloured from its texture).
 
 ## Boundary repair (Nov 2026)
@@ -97,7 +100,7 @@ The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id 
 ## Guided boundary correction (manual, no paid calls)
 
 `python -m viewer.app` also starts the correction page (default http://localhost:8091, next free port if taken;
-the "Boundary repair" panel links to it). Standalone: `python -m api.annotate` (own Viser preview). Run one at a time:
+the "Boundary repair: before / after" folder (Scene tab -> Advanced) links to it). Standalone: `python -m api.annotate` (own Viser preview). Run one at a time:
 both share `review/corrections/`.
 
 Flow: pick region/view -> New component (class optional, default `unknown`) -> Draw box / Include / Exclude ->
@@ -116,7 +119,7 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
 ## MCP server (ask the copilot from Claude Code / Claude Desktop)
 
 `mcp_server.py` exposes the field-service data and actions as MCP tools (thin wrapper over `copilot/tools.py`):
-`search_assets`, `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
+`search_assets`, `find_objects` (the ~900 detected scan objects by vision label), `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
 `plan_tour`, `draft_work_order`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
 `walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
 
@@ -129,9 +132,9 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
 - Safety and cost: data tools are read-only, work orders are drafts, no physical control; only
   `diagnose(allow_paid=true)` can spend a request from the team's paid budget.
 
-## Viewer chat ("Ask the MCP")
+## Viewer chat ("Ask" tab)
 
-The viewer panel "Ask the MCP" has a chat box. It works on every computer, with or without Claude:
+The viewer's "Ask" tab has a chat box. It works on every computer, with or without Claude:
 
 | Question type | Who answers | Needs |
 |---|---|---|
