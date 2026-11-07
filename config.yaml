@@ -79,6 +79,7 @@ label:
   workers: 1                # one request at a time (paid; budget in copilot.budget)
   max_batches: 1            # per run; null = all (only after the pilot justifies it)
   vision_sources: [featherless_vision, gemini_vision]   # label_source values that count as VLM evidence
+  reuse_from: [out/assets_labeled.json]   # earlier vision labels, reused for objects with identical geometry (free)
   manual_sources: [manual_review]       # reviewer-confirmed component CLASS (never asset identity)
   manual_class_vocab:                   # correction-tool class -> label vocab
     pump: pump

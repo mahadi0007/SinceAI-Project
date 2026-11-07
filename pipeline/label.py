@@ -298,6 +298,34 @@ def contact_sheet(assets: list[dict], crops: dict[str, Image.Image], path, lc: C
     print(f"[plot] {path}")
 
 
+# ---------- reuse of earlier vision labels ----------
+
+def geo_sig(a: dict) -> str:
+    """Identity of an object's geometry: point count + centre (mm). Same segmentation -> same signature."""
+    return f"{a['n_points']}|{[round(float(v), 3) for v in a['center']]}"
+
+
+def reusable_labels(cfg: Cfg, cache: dict) -> dict[str, dict]:
+    """Earlier vision labels by geometry signature, for objects the current cache key misses (labels made by an
+    earlier label.py or another provider). Sources: old cache entries that carry a 'sig', and label.reuse_from
+    files (assets_labeled.json of a previous run, read before it is overwritten). Free, no requests."""
+    lc = cfg["label"]
+    out: dict[str, dict] = {}
+    for v in cache.values():                                    # old cache format: {id: {..., "sig": ...}}
+        if isinstance(v, dict) and v.get("sig") and v.get("label"):
+            out.setdefault(v["sig"], {**v, "source": v.get("source") or "gemini_vision"})
+    for rel in lc.get("reuse_from") or []:
+        f = repo_path(rel)
+        if not f.exists():
+            continue
+        for a in json.loads(f.read_text(encoding="utf-8")):
+            if a.get("kind") == "object" and a.get("label_source") in lc["vision_sources"]:
+                out[geo_sig(a)] = {"label": a["label"], "confidence": a.get("label_confidence"),
+                                   "reason": a.get("label_reason", ""), "model": a.get("label_model"),
+                                   "source": a["label_source"]}
+    return out
+
+
 # ---------- main ----------
 
 def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
@@ -316,9 +344,13 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
 
     cache_p = out_path(cfg, "label_cache.json")
     cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.exists() else {}
+    reuse = reusable_labels(cfg, cache)
     pngs = {k: png_bytes(im.resize((lc["send_px"] * 3, lc["send_px"]))) for k, im in crops.items()}
     key = {a["id"]: cache_key(a, pngs[a["id"]], cfg) for a in assets if a["kind"] == "object"}
-    todo = vlm_todo(assets, key, cache, only_ids)
+    todo = [a for a in vlm_todo(assets, key, cache, only_ids) if geo_sig(a) not in reuse]   # never pay twice
+    if reuse:
+        print(f"[reuse] {sum(geo_sig(a) in reuse for a in assets if a['kind'] == 'object')} objects keep an "
+              f"earlier vision label (identical geometry)")
     # most informative first (equipment/valves/unnamed, then big pipes) so a budget cut-off hurts least
     todo.sort(key=lambda a: (a["hint"] == "pipe segment", -a["n_points"]))
     if not rules_only and todo:
@@ -354,7 +386,8 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
             a.update(manual)
             continue
         # per-object VLM label from the label cache; else the validated contextual proposal (repair stage)
-        g = cache.get(key.get(a["id"], "")) or a.get("vlm_proposal")
+        g = (cache.get(key.get(a["id"], "")) or (reuse.get(geo_sig(a)) if a["kind"] == "object" else None)
+             or a.get("vlm_proposal"))
         a.update(decide(a, g, lc))
     with open(out_path(cfg, "assets_labeled.json"), "w", encoding="utf-8") as f:
         json.dump(assets, f, indent=1)
