@@ -147,7 +147,8 @@ def gemini_batch(batch: list[tuple[dict, Image.Image]], cfg: Cfg) -> tuple[list[
         parts += [describe(a, cfg["scene"]["units_to_m"]),
                   types.Part.from_bytes(data=png_bytes(im.resize((lc["send_px"] * 3, lc["send_px"]))),
                                         mime_type="image/png")]
-    text, model = generate(parts, cfg["copilot"], json_mode=True, temperature=0.1)
+    text, model = generate(parts, {**cfg["copilot"], "models": lc.get("models", cfg["copilot"]["models"])},
+                           json_mode=True, temperature=0.1)
     out_path(cfg, "label_raw").mkdir(exist_ok=True)
     (out_path(cfg, "label_raw") / f"{batch[0][0]['id']}.txt").write_text(f"{model}\n{text}", encoding="utf-8")
     return parse_list(text), model

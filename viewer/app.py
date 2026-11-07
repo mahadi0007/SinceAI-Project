@@ -64,12 +64,21 @@ def scaled_avatar(av: dict) -> dict:
     return out
 
 
+LABEL_MODES = ("Equipment", "All objects", "Nearby only", "Off")
+
+
+def label_visible(mode: str, is_equipment: bool) -> bool:
+    """Persistent label visibility: Equipment = mapped or non-pipe objects; All = everything."""
+    return mode == "All objects" or (mode == "Equipment" and is_equipment)
+
+
 def label_text(n: dict) -> str:
-    """'OBJ-0018 · P-002 pump · attention_required · health 45' or 'OBJ-0142 · ladder/stairs'."""
+    """'OBJ-0018 · P-002 pump · attention_required · health 45' or 'OBJ-0142 · ladder/stairs 0.90'."""
     if n["asset"]:
         a = n["asset"]
         return f"{n['id']} · {a['tag']} {n['label']} · {a['condition_state']} · health {a['health_score']}"
-    return f"{n['id']} · {n['label']}"
+    conf = n.get("label_confidence")
+    return f"{n['id']} · {n['label']}" + (f" {conf:.2f}" if conf is not None else "")
 
 
 def nearby_text(near: list[dict], others: list[dict], radius: float) -> str:
@@ -171,11 +180,17 @@ class Sim:
                                                 thickness_units="screen")
         self.h_selected = sc.add_line_segments("/selected", *edges_for([], self.vc["colors"]),
                                                thickness=self.vc["selected_thickness"], thickness_units="screen")
+        # one persistent label per object; which ones are visible depends on the Labels menu
+        self.is_equipment = [bool(n["asset"]) or n["label"] not in self.vc["near_label_skip"]
+                             for n in self.nodes]
+        mode = self.vc["label_mode"]
         self.h_all_labels = [sc.add_label(f"/all_labels/{n['id']}", label_text(n),
                                           position=(n["center"][0], n["bbox_min"][1], n["center"][2]),
-                                          anchor="bottom-center", font_screen_scale=self.vc["all_label_scale"],
-                                          visible=False)
-                             for n in self.nodes]
+                                          anchor="bottom-center",
+                                          font_screen_scale=(self.vc["equipment_label_scale"] if eq
+                                                             else self.vc["all_label_scale"]),
+                                          visible=label_visible(mode, eq))
+                             for n, eq in zip(self.nodes, self.is_equipment)]
         self._build_avatar()
         sc.add_icosphere("/avatar/ring", radius=1.0, color=tuple(self.vc["avatar"]["ring_color"]),
                          opacity=0.15,
@@ -248,7 +263,7 @@ class Sim:
         self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
         self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
         self.cb_boxes = g.add_checkbox("Show all frames", True)
-        self.cb_labels = g.add_checkbox("Show all labels", False)
+        self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
         with g.add_folder("Selected object (click in the scene)"):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
@@ -258,10 +273,12 @@ class Sim:
         with g.add_folder("Nearby assets"):
             self.md_near = g.add_markdown("")
 
-        @self.cb_labels.on_update
+        @self.dd_labels.on_update
         def _(_e: Any) -> None:
-            for h in self.h_all_labels:
-                h.visible = self.cb_labels.value
+            mode = self.dd_labels.value
+            for h, eq in zip(self.h_all_labels, self.is_equipment):
+                h.visible = label_visible(mode, eq)
+            self.update()
 
         @b_fly.on_click
         def _(e: Any) -> None:
@@ -341,9 +358,9 @@ class Sim:
         self.h_highlight.points, self.h_highlight.colors = edges_for(near_all, self.vc["highlight_colors"])
         for h in self._labels:
             h.remove()
-        show = mapped + [n for n in others if n["label"] not in self.vc["near_label_skip"]]
-        if self.cb_labels.value:
-            show = []                                    # all labels already visible
+        show = []                                        # persistent labels cover the other modes
+        if self.dd_labels.value == "Nearby only":
+            show = mapped + [n for n in others if n["label"] not in self.vc["near_label_skip"]]
         self._labels = [self.server.scene.add_label(
             f"/near/{n['id']}", label_text(n),
             position=(n["center"][0], n["bbox_min"][1], n["center"][2]), anchor="bottom-center",

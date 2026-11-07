@@ -75,7 +75,11 @@ plots:
   structure_color: [0.75, 0.75, 0.75]
 
 label:
-  batch_size: 30            # objects per Gemini call (free tier: ~20 requests/day/model)
+  batch_size: 30            # objects per call
+  # labeling chain: Gemini first (clearly better on equipment in a 30-object comparison), Featherless as
+  # quota fallback. Other AI features use copilot.models (Featherless first).
+  models: [gemini:gemini-3.8-flash, gemini:gemini-3.5-flash, gemini:gemini-3.5-flash-lite,
+           gemini:gemma-4-31b-it, featherless:Qwen/Qwen3-VL-30B-A3B-Instruct]
   workers: 2                # parallel calls; models come from copilot.models (fallback chain)
   min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
   rules_conf: 0.4
@@ -150,7 +154,9 @@ viewer:
   box_thickness: 1.0        # screen px, all frames
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
-  all_label_scale: 0.6      # font scale for "Show all labels"
+  label_mode: Equipment    # Equipment (mapped + non-pipe objects) | All objects | Nearby only | Off
+  equipment_label_scale: 0.8  # font scale for equipment labels
+  all_label_scale: 0.55     # font scale for pipe/fitting labels in "All objects"
   other_label_scale: 0.75   # font scale for nearby objects without asset record
   near_label_skip: [pipe segment, pipe fitting/flange, other, wall]   # too many to label while walking
   pick_radius: 0.03         # click ray tolerance (units) ...
@@ -212,9 +218,19 @@ evidence:
   dq_penalty_max: 0.3
 
 copilot:
-  # tried in order; on quota (429) / overload (503) / retired (404) the next one is used
-  models: [gemini-3.8-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemma-4-31b-it]
-  dead_model_skip_s: 600        # skip a quota-exhausted/retired model for this long
+  # "<provider>:<model>", tried in order; on quota (429) / overload (503) / gated (403) / retired (404)
+  # the next one is used. After the chain: saved answers (diagnosis cache, label cache).
+  models: [featherless:Qwen/Qwen3-VL-30B-A3B-Instruct,
+           gemini:gemini-3.8-flash, gemini:gemini-3.5-flash, gemini:gemini-3.5-flash-lite,
+           gemini:gemma-4-31b-it]
+  dead_model_skip_s: 600        # skip a quota-exhausted/retired/gated model for this long
   temperature: 0.2
-  expected_latency_s: 22        # drives the viewer's progress bar
-  api_key_env: GEMINI_API_KEY
+  expected_latency_s: 60        # drives the viewer progress bar (Featherless Qwen3-VL ~60 s)
+  api_key_env: GEMINI_API_KEY   # for gemini:* entries
+  featherless:                  # OpenAI-compatible, open models, no daily quota (plan concurrency limit)
+    base_url: https://api.featherless.ai/v1
+    api_key_env: FEATHERLESS_API_KEY
+    max_tokens: 4096
+    timeout_s: 240
+    retries_429: 3              # "too many concurrent requests": wait and retry before falling back
+    backoff_s: 10
