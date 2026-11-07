@@ -482,7 +482,6 @@ class Sim:
         with g.add_folder("Selected object (click in the scene)"):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            b_fly = g.add_button("Fly to object", visible=True)
             self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Inspection tour"):
@@ -504,11 +503,6 @@ class Sim:
             for h, eq in zip(self.h_all_labels, self.is_equipment):
                 h.visible = label_visible(mode, eq)
             self.update()
-
-        @b_fly.on_click
-        def _(e: Any) -> None:
-            if self.selected is not None:
-                self.fly_to(self.selected, e.client)
 
         @self.b_identify.on_click
         def _(_e: Any) -> None:
