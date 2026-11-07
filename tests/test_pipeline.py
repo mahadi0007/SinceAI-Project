@@ -156,14 +156,16 @@ def test_render_occlusion_and_footprint():
 
 # ---------- context: mask-supported split / merge ----------
 
-CTX = {"min_in_px": 5, "member_frac": 0.6, "min_split_voxels": 5, "fill_dist": 0.03, "min_candidate_voxels": 10,
-       "cc_eps": 0.05, "cc_min_frac": 0.2, "max_extent": 1.2, "pipe_protect_min_len": 0.4, "disabled": []}
+CTX = {"min_in_px": 5, "member_frac": 0.6, "min_split_voxels": 5, "min_candidate_voxels": 10,
+       "cc_eps": 0.05, "cc_min_frac": 0.2, "max_extent": 1.2, "pipe_protect_min_len": 0.4, "disabled": [],
+       "seen_eps": 0.02, "min_coverage": 0.5, "spatial_frac": 0.8, "spatial_dist": 0.05, "claim_margin": 0.2,
+       "provisional_frac": 0.1, "corroborate_overlap": 0.3}
 
 
-def write_assoc(d, pos, neg, cls="pump"):
+def write_assoc(d, pos, neg, cls="pump", region="RV-T"):
     d.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(d / "RV-T_assoc.npz", pos_0=pos, neg_0=neg)
-    (d / "RV-T_assoc.json").write_text(json.dumps({"region": "RV-T", "model": "m", "candidates": [
+    np.savez_compressed(d / f"{region}_assoc.npz", pos_0=pos, neg_0=neg)
+    (d / f"{region}_assoc.json").write_text(json.dumps({"region": region, "model": "m", "candidates": [
         {"cid": "C1", "cls": cls, "confidence": 0.8, "usable": True}]}), encoding="utf-8")
 
 

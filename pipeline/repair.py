@@ -16,7 +16,8 @@ drops respected). Two repair families, each written as an edit log over leaves/v
 Every edit lists inputs/outputs (leaf ids, voxel counts) and evidence; undo = drop the entry and
 re-apply the log (apply_log). Baseline labels are kept in segment_points.npz as labels_baseline.
 Run: python -m pipeline.repair geo        -> out_geo/
-     python -m pipeline.repair context    -> out/   (geo + context edits from out_review/proposals)
+     python -m pipeline.repair context[:<set>]  set = <renderer>-<proposal source>, e.g. ewa-ewa -> out/,
+                                                 others -> out_ctx_<set>/
 """
 from __future__ import annotations
 
@@ -173,94 +174,176 @@ def geo_group(base: dict, leaves: dict[int, np.ndarray], gc: Cfg) -> tuple[list[
 # ---------- 2. context: proposal + SAM + visibility ----------
 
 def context_edits(base: dict, groups: list[list[int]], leaves: dict[int, np.ndarray], cfg: Cfg,
-                  prop_dir: Path) -> tuple[np.ndarray, list[dict], dict[int, dict]]:
+                  prop_dir: Path, freshness: Any = None) -> tuple[np.ndarray, list[dict], dict[int, dict]]:
     """Returns voxel -> group-or-candidate label, the edit log and candidate metadata.
-    Groups are numbered 0..G-1; accepted candidates get labels G, G+1, ..."""
+    Groups are numbered 0..G-1; accepted candidates get labels G, G+1, ...
+
+    Phase 1 - every candidate claims voxels independently (no candidate sees another's result):
+      whole group  only if visible-in-mask share >= member_frac AND observed coverage >= min_coverage AND
+                   the group is spatially consistent with its supported voxels (spatial_frac of its voxels lie
+                   within spatial_dist of one); otherwise
+      subset       only observed voxels with pos > 0 and pos >= neg; unseen voxels stay where they were and
+                   are counted as uncertain (never filled in).
+    Phase 2 - competing claims are resolved per voxel by support strength pos/(pos+neg); a voxel goes to a
+      candidate only if it beats the runner-up by claim_margin, otherwise it stays put (ambiguous).
+      Candidates that lose or leave ambiguous > provisional_frac of their claim are marked provisional.
+    File order never decides ownership. `freshness(info) -> reason|None` rejects stale associations."""
     rc = cfg["repair"]["context"]
     n = len(base["xyz"])
+    xyz = base["xyz"].astype(np.float64)
     vox_group = np.full(n, -1, np.int64)
     for gi, g in enumerate(groups):
         for f in g:
             vox_group[leaves[f]] = gi
-    # only ELONGATED pipe groups are protected from splitting; a compact piece tagged "pipe segment" by the
-    # direction split (e.g. a round pump head) is not a pipe run
+
     def elongated(g: list[int]) -> bool:
-        P = base["xyz"][np.concatenate([leaves[f] for f in g])]
+        P = xyz[np.concatenate([leaves[f] for f in g])]
         return float(np.ptp(P, 0).max()) >= rc["pipe_protect_min_len"]
     is_pipe_group = np.array([all(base["frag_hint"][f] == "pipe segment" for f in g) and elongated(g) for g in groups])
     G = len(groups)
     log: list[dict] = []
-    cand_meta: dict[int, dict] = {}
+    claims: list[dict] = []
     files = sorted(prop_dir.glob("*_assoc.npz")) if prop_dir.exists() else []
-    next_label = G
     for fpath in files:
-        meta = json.loads(fpath.with_name(fpath.name.replace("_assoc.npz", "_assoc.json")).read_text(encoding="utf-8"))
+        info = json.loads(fpath.with_name(fpath.name.replace("_assoc.npz", "_assoc.json")).read_text(encoding="utf-8"))
+        if freshness is not None:
+            why = freshness(info)
+            if why:
+                log.append({"op": "reject_stale", "family": "context", "region": info["region"], "reason": why})
+                print(f"[context] {info['region']}: stale association rejected ({why})")
+                continue
         A = np.load(fpath)
-        for ci, c in enumerate(meta["candidates"]):
+        for ci, c in enumerate(info["candidates"]):
             if not c.get("usable"):
                 continue
-            if f"{meta['region']}/{c['cid']}" in (rc.get("disabled") or []):      # reverted by a reviewer
-                log.append({"op": "disabled", "family": "context", "candidate": c["cid"], "region": meta["region"]})
+            tag = f"{info['region']}/{c['cid']}"
+            if tag in (rc.get("disabled") or []):
+                log.append({"op": "disabled", "family": "context", "candidate": c["cid"], "region": info["region"]})
                 continue
-            pos, neg = A[f"pos_{ci}"], A[f"neg_{ci}"]          # per-voxel visible px inside / outside mask
-            vis_g = np.bincount(vox_group[vox_group >= 0], weights=(pos + neg)[vox_group >= 0], minlength=next_label)
-            in_g = np.bincount(vox_group[vox_group >= 0], weights=pos[vox_group >= 0], minlength=next_label)
+            pos, neg = A[f"pos_{ci}"].astype(np.float64), A[f"neg_{ci}"].astype(np.float64)
+            seen = (pos + neg) > rc["seen_eps"]
+            strength = np.where(seen, pos / np.maximum(pos + neg, 1e-12), 0.0)
+            ok = vox_group >= 0
+            vis_g = np.bincount(vox_group[ok], weights=(pos + neg)[ok], minlength=G)
+            in_g = np.bincount(vox_group[ok], weights=pos[ok], minlength=G)
             take = np.zeros(n, bool)
             ev_members, ev_splits, ev_skipped = [], [], []
+            uncertain = 0
             for gi in np.where(in_g >= rc["min_in_px"])[0]:
-                frac = in_g[gi] / max(vis_g[gi], 1)
-                if gi >= G:                                       # earlier accepted candidate: never stolen
-                    ev_skipped.append({"group": int(gi), "reason": f"claimed by candidate {cand_meta[gi]['region']}"
-                                       f"/{cand_meta[gi]['cid']} ({cand_meta[gi]['cls']})", "support": round(float(frac), 3)})
-                    continue
+                frac = in_g[gi] / max(vis_g[gi], 1e-12)
                 vg = np.where(vox_group == gi)[0]
-                if is_pipe_group[gi]:            # elongated pipe runs: never absorbed into or cut by equipment
+                if is_pipe_group[gi]:
                     ev_skipped.append({"group": int(gi), "reason": "pipe run protected (no merge/split)",
                                        "support": round(float(frac), 3)})
                     continue
-                if frac >= rc["member_frac"]:
+                sup = vg[seen[vg] & (pos[vg] > 0) & (pos[vg] >= neg[vg])]
+                cov = float(seen[vg].mean())
+                spatial = 0.0
+                if len(sup):
+                    dd, _ = cKDTree(xyz[sup]).query(xyz[vg])
+                    spatial = float((dd <= rc["spatial_dist"]).mean())
+                ev = {"group": int(gi), "leaves": groups[gi], "support": round(float(frac), 3),
+                      "coverage": round(cov, 3), "spatial": round(spatial, 3), "voxels_total": int(len(vg))}
+                if frac >= rc["member_frac"] and cov >= rc["min_coverage"] and spatial >= rc["spatial_frac"]:
                     take[vg] = True
-                    ev_members.append({"group": int(gi), "leaves": groups[gi], "support": round(float(frac), 3),
-                                       "in_px": int(in_g[gi]), "vis_px": int(vis_g[gi]), "voxels": int(len(vg))})
-                else:
-                    sup = vg[(pos[vg] > 0) & (pos[vg] >= neg[vg])]
-                    if len(sup) < rc["min_split_voxels"]:
-                        ev_skipped.append({"group": int(gi), "reason": "too few supported voxels",
-                                           "support": round(float(frac), 3), "supported": int(len(sup))})
-                        continue
-                    # fill unobserved voxels (occluded back sides) next to supported ones, inside their hull
-                    unobs = vg[(pos[vg] == 0) & (neg[vg] == 0)]
-                    if len(unobs):
-                        lo = base["xyz"][sup].min(0) - rc["fill_dist"]
-                        hi = base["xyz"][sup].max(0) + rc["fill_dist"]
-                        d, _ = cKDTree(base["xyz"][sup]).query(base["xyz"][unobs])
-                        inside = ((base["xyz"][unobs] >= lo) & (base["xyz"][unobs] <= hi)).all(1)
-                        sup = np.concatenate([sup, unobs[(d <= rc["fill_dist"]) & inside]])
-                    take[sup] = True
-                    ev_splits.append({"group": int(gi), "leaves": groups[gi], "support": round(float(frac), 3),
-                                      "voxels_moved": int(len(sup)), "voxels_total": int(len(vg))})
-            idx = np.where(take & (vox_group >= 0))[0]
+                    strength[vg[~seen[vg]]] = frac                 # inferred voxels carry the group's support
+                    ev_members.append({**ev, "voxels": int(len(vg))})
+                    continue
+                if len(sup) < rc["min_split_voxels"]:
+                    ev_skipped.append({**ev, "reason": "too few supported voxels", "supported": int(len(sup))})
+                    continue
+                take[sup] = True
+                n_unseen = int((~seen[vg]).sum())
+                uncertain += n_unseen
+                ev_splits.append({**ev, "voxels_moved": int(len(sup)), "unseen_left_uncertain": n_unseen,
+                                  "why_not_whole": ("low coverage" if cov < rc["min_coverage"] else
+                                                    "spatially inconsistent" if spatial < rc["spatial_frac"] else
+                                                    "low support")})
+            idx = np.where(take)[0]
             if len(idx) < rc["min_candidate_voxels"]:
                 continue
-            idx = largest_components(base["xyz"], idx, rc["cc_eps"], rc["cc_min_frac"])
-            ext = np.ptp(base["xyz"][idx], 0)
+            idx = largest_components(xyz, idx, rc["cc_eps"], rc["cc_min_frac"])
+            ext = np.ptp(xyz[idx], 0)
             if ext.max() > rc["max_extent"]:
-                log.append({"op": "reject", "family": "context", "candidate": c["cid"], "region": meta["region"],
+                log.append({"op": "reject", "family": "context", "candidate": c["cid"], "region": info["region"],
                             "reason": f"implausible extent {ext.round(2).tolist()}"})
                 continue
-            old = vox_group[idx].copy()
-            vox_group[idx] = next_label
-            cand_meta[next_label] = {"cid": c["cid"], "region": meta["region"], "cls": c["cls"],
-                                     "confidence": c["confidence"], "assembly": c.get("assembly"),
-                                     "model": meta.get("model"), "sam_scores": c.get("sam_scores")}
-            log.append({"op": "context_repair", "family": "context", "candidate": c["cid"], "region": meta["region"],
-                        "cls": c["cls"], "new_label": next_label, "voxels": int(len(idx)),
-                        "from_groups": {int(k): int(v) for k, v in zip(*np.unique(old, return_counts=True))},
-                        "members": ev_members, "splits": ev_splits, "skipped": ev_skipped,
-                        "provenance": {"proposal": meta.get("proposal_file"), "model": meta.get("model"),
-                                       "sam": meta.get("sam_model"), "views": meta.get("n_views")},
-                        "moved_voxels": idx.tolist()})
-            next_label += 1
+            claims.append({"tag": tag, "c": c, "info": info, "idx": idx, "strength": strength[idx],
+                           "members": ev_members, "splits": ev_splits, "skipped": ev_skipped,
+                           "uncertain_unseen": uncertain})
+    # ---- phase 2a: corroboration - same-class claims on largely the same voxels (e.g. one valve proposed from two
+    # neighbouring regions) are one component seen twice: union them instead of letting them compete ----
+    claims.sort(key=lambda k: k["tag"])
+    fam = {"valve": "valve", "control valve": "valve"}
+    merged = True
+    while merged:
+        merged = False
+        for a_i in range(len(claims)):
+            for b_i in range(a_i + 1, len(claims)):
+                A, B = claims[a_i], claims[b_i]
+                if fam.get(A["c"]["cls"], A["c"]["cls"]) != fam.get(B["c"]["cls"], B["c"]["cls"]):
+                    continue
+                inter = np.intersect1d(A["idx"], B["idx"], assume_unique=True)
+                if len(inter) < rc["corroborate_overlap"] * min(len(A["idx"]), len(B["idx"])):
+                    continue
+                idx = np.union1d(A["idx"], B["idx"])
+                st = np.zeros(n)
+                st[A["idx"]] = A["strength"]
+                st[B["idx"]] = np.maximum(st[B["idx"]], B["strength"])
+                A.update(idx=idx, strength=st[idx], members=A["members"] + B["members"], splits=A["splits"] + B["splits"],
+                         skipped=A["skipped"] + B["skipped"], uncertain_unseen=A["uncertain_unseen"] + B["uncertain_unseen"],
+                         corroborated_by=A.get("corroborated_by", []) + [B["tag"]] + B.get("corroborated_by", []))
+                claims.pop(b_i)
+                merged = True
+                break
+            if merged:
+                break
+    # ---- phase 2b: order-independent resolution of competing claims ----
+    best = np.full(n, -1.0)
+    second = np.full(n, -1.0)
+    owner = np.full(n, -1, np.int64)
+    for k, cl in enumerate(claims):
+        s, i = cl["strength"], cl["idx"]
+        better = s > best[i]
+        second[i] = np.where(better, best[i], np.maximum(second[i], s))
+        owner[i] = np.where(better, k, owner[i])
+        best[i] = np.where(better, s, best[i])
+    contested = second >= 0
+    decided = (owner >= 0) & (~contested | (best - second >= rc["claim_margin"]))
+    cand_meta: dict[int, dict] = {}
+    next_label = G
+    for k, cl in enumerate(claims):
+        i = cl["idx"]
+        won = i[decided[i] & (owner[i] == k)]
+        lost = i[decided[i] & (owner[i] != k)]
+        amb = i[~decided[i]]
+        rivals = sorted({claims[o]["tag"] for o in owner[i[contested[i]]] if o != k} |
+                        {c2["tag"] for c2 in claims if c2 is not cl and np.isin(i, c2["idx"]).any()})
+        c, info = cl["c"], cl["info"]
+        if len(won) < rc["min_candidate_voxels"]:
+            log.append({"op": "reject", "family": "context", "candidate": c["cid"], "region": info["region"],
+                        "reason": f"lost competing claims ({len(won)} voxels left; rivals {rivals})"})
+            continue
+        provisional = (len(lost) + len(amb)) > rc["provisional_frac"] * len(i)
+        old = vox_group[won].copy()
+        vox_group[won] = next_label
+        cand_meta[next_label] = {"cid": c["cid"], "region": info["region"], "cls": c["cls"],
+                                 "confidence": c["confidence"], "assembly": c.get("assembly"),
+                                 "model": info.get("model"), "sam_scores": c.get("sam_scores"),
+                                 "renderer": info.get("renderer"), "provisional": bool(provisional)}
+        log.append({"op": "context_repair", "family": "context", "candidate": c["cid"], "region": info["region"],
+                    "cls": c["cls"], "new_label": next_label, "voxels": int(len(won)),
+                    "status": "provisional" if provisional else "accepted",
+                    "conflict": {"claimed": int(len(i)), "lost": int(len(lost)), "ambiguous": int(len(amb)),
+                                 "rivals": rivals},
+                    "uncertain_unseen": cl["uncertain_unseen"], "corroborated_by": cl.get("corroborated_by", []),
+                    "from_groups": {int(a): int(b) for a, b in zip(*np.unique(old, return_counts=True))},
+                    "members": cl["members"], "splits": cl["splits"], "skipped": cl["skipped"],
+                    "provenance": {k2: info.get(k2) for k2 in ("proposal_file", "proposal_key", "proposal_renderer",
+                                                                "renderer", "render_key", "sam_key", "sam_model",
+                                                                "seg_rev", "assoc_key", "model", "n_views")},
+                    "moved_voxels": won.tolist()})
+        next_label += 1
     return vox_group, log, cand_meta
 
 
@@ -324,13 +407,15 @@ def build(base: dict, vox_group: np.ndarray, groups: list[list[int]], cand_meta:
         rec["baseline_ids"] = sorted({leaf_to_base[f] for f in lf if f in leaf_to_base})
         if g in cand_meta:
             cm = cand_meta[g]
-            rec["repair"] = {"family": "context", **{k: cm[k] for k in ("cid", "region", "cls", "confidence", "model")}}
+            rec["repair"] = {"family": "context", **{k: cm.get(k) for k in ("cid", "region", "cls", "confidence", "model",
+                                                                          "renderer", "provisional")},
+                             "boundary_status": "provisional" if cm.get("provisional") else "accepted-unreviewed"}
             if cm.get("assembly"):
                 rec["assembly"] = {"id": f"{cm['region']}-{cm['assembly']}", "note": "proposed by VLM; unverified"}
             vlm_label = {"pump": "pump", "motor": "motor", "valve": "manual valve/handwheel",
                          "control valve": "control valve", "vessel": "tank/vessel",
                          "sensor": "pressure transmitter/gauge"}.get(cm["cls"])
-            if vlm_label:
+            if vlm_label and not cm.get("provisional"):        # class confidence kept separate from boundary
                 rec["vlm_proposal"] = {"label": vlm_label, "confidence": cm["confidence"], "model": cm["model"],
                                        "reason": f"contextual proposal {cm['cid']} ({cm['region']}) + SAM mask support",
                                        "source": "featherless_vision"}
@@ -369,10 +454,17 @@ def run(variant: str) -> None:
                 vg[leaves[f]] = gi
         build(base, vg, groups, {}, cfg, "out_geo", glog, "geometry-only")
         return
-    vg, clog, cm = context_edits(base, groups, leaves, cfg, ROOT / "out_review" / "proposals")
-    print(f"[context] {sum(e['op'] == 'context_repair' for e in clog)} accepted, "
-          f"{sum(e['op'] == 'reject' for e in clog)} rejected")
-    build(base, vg, groups, cm, cfg, cfg["paths"]["out_dir"], glog + clog, "geometry+context")
+    from pipeline.propose import PDIR, check_fresh
+    cset = variant.split(":", 1)[1] if ":" in variant else cfg["repair"]["context"]["set"]
+    seg_dir = ROOT / cfg["propose"]["seg_dir"]
+    vg, clog, cm = context_edits(base, groups, leaves, cfg, PDIR / cset,
+                                 freshness=lambda info: check_fresh(info, seg_dir))
+    print(f"[context:{cset}] {sum(e['op'] == 'context_repair' for e in clog)} repairs "
+          f"({sum(e.get('status') == 'provisional' for e in clog)} provisional), "
+          f"{sum(e['op'].startswith('reject') for e in clog)} rejected")
+    renderer = cset
+    out_dir = cfg["paths"]["out_dir"] if cset == cfg["repair"]["context"]["set"] else f"out_ctx_{cset}"
+    build(base, vg, groups, cm, cfg, out_dir, glog + clog, f"geometry+context ({renderer})")
 
 
 if __name__ == "__main__":

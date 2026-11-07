@@ -1,4 +1,4 @@
-"""Before/after inspection images per review region: baseline | geometry-only | geometry+context,
+"""Before/after inspection images per review region (EWA render, dominant-contributor overlay): baseline | geometry-only | geometry+context,
 each as an object-ID overlay of the same calibrated view, with reviewed reference boxes projected (white)
 and the repaired objects' boxes (magenta). Output: out_review/compare/<region>_v<k>.png
 Run: python -m pipeline.compare [RV-01 ...]"""
@@ -49,14 +49,16 @@ def panel(sc, gid: np.ndarray, rgb: np.ndarray, cam: Camera, title: str, refs: l
 
 def main(rids: list[str]) -> None:
     cfg = load_config()
-    variants = [("out_baseline", "baseline"), ("out_geo", "geometry-only"), (cfg["paths"]["out_dir"], "geometry + context")]
+    variants = [("out_baseline", "baseline"), ("out_geo", "geometry-only"),
+                (cfg["paths"]["out_dir"], f"geometry + context ({cfg['repair']['context']['set']})")]
     scenes = {d: load_scene(cfg, d) for d, _ in variants}
     out = ROOT / "out_review" / "compare"
     out.mkdir(parents=True, exist_ok=True)
     for rid in rids:
         reg = regions()[rid]
-        cams, rgbs, gids, _ = load_views(rid)
-        for k, (cam, rgb, gid) in enumerate(zip(cams, rgbs, gids)):
+        cams, rgbs, bufs = load_views(rid, "ewa")
+        for k, (cam, rgb, b) in enumerate(zip(cams, rgbs, bufs)):
+            gid = b["top_id"]
             ims = []
             for d, name in variants:
                 sc = scenes[d]

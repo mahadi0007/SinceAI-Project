@@ -24,9 +24,20 @@ import yaml
 from pipeline.common import ROOT
 
 
-def load_refs() -> list[dict]:
+def refs_hash() -> str:
+    import hashlib
     reg = yaml.safe_load((ROOT / "review" / "regions.yaml").read_text(encoding="utf-8"))["regions"]
-    return [{**r, "region": g["id"]} for g in reg for r in g["refs"]]
+    return hashlib.sha256(json.dumps({g["id"]: g["refs"] for g in reg}, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def load_refs(check_frozen: bool = True) -> list[dict]:
+    """Frozen v2 references; refuses to evaluate if they changed since freezing (review/refs_v2.sha256)."""
+    if check_frozen:
+        want = (ROOT / "review" / "refs_v2.sha256").read_text().strip()
+        if refs_hash() != want:
+            raise SystemExit(f"reference boxes changed since freezing ({refs_hash()} != {want}); refusing to evaluate")
+    reg = yaml.safe_load((ROOT / "review" / "regions.yaml").read_text(encoding="utf-8"))["regions"]
+    return [{**r, "region": g["id"], "holdout": bool(g.get("holdout"))} for g in reg for r in g["refs"]]
 
 
 def in_box(xyz: np.ndarray, box: Any, margin: float = 0.0) -> np.ndarray:
@@ -58,7 +69,7 @@ def evaluate(seg_dir: str | Path) -> dict:
         leak = float((ob & ~in_box(xyz, r["box"], 0.05)).sum() / ob.sum())
         inter = float(cnt.max())
         iou = inter / (ob.sum() + n - inter)                           # points: best object vs reference
-        rows.append({"ref": r["id"], "cls": r["cls"], "region": r["region"], "n": n,
+        rows.append({"ref": r["id"], "cls": r["cls"], "region": r["region"], "holdout": r["holdout"], "n": n,
                      "completeness": round(float(cnt.max() / n), 3),
                      "unassigned": round(float((L < 0).sum() / n), 3),
                      "iou": round(float(iou), 3),
@@ -78,7 +89,11 @@ def evaluate(seg_dir: str | Path) -> dict:
         row["merged_with"] = others
     n_obj = int(kind.sum())
     ok = [r for r in rows if r.get("n")]
-    summ = {"seg_dir": str(seg_dir), "objects": n_obj,
+    tune = [r for r in ok if not r.get("holdout")]
+    hold = [r for r in ok if r.get("holdout")]
+    summ = {"seg_dir": str(seg_dir), "objects": n_obj, "refs_hash": refs_hash(),
+            "tuning_iou": round(float(np.mean([r.get("iou", 0) for r in tune])), 3) if tune else None,
+            "holdout_iou": round(float(np.mean([r.get("iou", 0) for r in hold])), 3) if hold else None,
             "mean_iou": round(float(np.mean([r.get("iou", 0) for r in ok])), 3),
             "mean_completeness": round(float(np.mean([r["completeness"] for r in ok])), 3),
             "mean_leakage": round(float(np.mean([r.get("leakage", 0) for r in ok])), 3),
@@ -91,12 +106,13 @@ def evaluate(seg_dir: str | Path) -> dict:
 def table(results: list[dict]) -> str:
     out = []
     for res in results:
-        out.append(f"\n== {res['seg_dir']}: {res['objects']} objects | mean IoU {res['mean_iou']} "
+        out.append(f"\n== {res['seg_dir']}: {res['objects']} objects | IoU tuning {res['tuning_iou']} "
+                   f"hold-out {res['holdout_iou']} | mean IoU {res['mean_iou']} "
                    f"| mean completeness {res['mean_completeness']} "
                    f"| mean leakage {res['mean_leakage']} | fragmented refs {res['fragmented_refs(n_pieces>1)']} "
                    f"| accidental merges {res['accidental_merges']}")
         for r in res["rows"]:
-            out.append(f"  {r['ref']} {r['cls']:9s} n={r['n']:5d} IoU={r.get('iou', 0):.2f} compl={r['completeness']:.2f} "
+            out.append(f"  {'H' if r.get('holdout') else ' '} {r['ref']} {r['cls']:9s} n={r['n']:5d} IoU={r.get('iou', 0):.2f} compl={r['completeness']:.2f} "
                        f"pieces={r['n_pieces']} leak={r.get('leakage', 0):.2f} best={r.get('best_object')}"
                        f"({r.get('best_object_points')}) merged_with={r.get('merged_with')}")
     return "\n".join(out)

@@ -256,8 +256,9 @@ copilot:
   timeout_s: 180
   offline: false                 # true (or env VALMET_OFFLINE=1) = caches/templates only, no requests
   budget:
-    max_paid_requests: 10        # hard cap over the repo's lifetime (ledger). Pilot was 3; raised after the
-                                 # pilot justified expansion (7 more region proposals, ~$0.004 each)
+    max_paid_requests: 15        # hard cap over the repo's lifetime (ledger). Pilot 3 -> 10 (expansion) -> 15:
+                                 # 5 proposals on EWA renders (RV-01/02/04/06 + hold-out RV-10), justified by
+                                 # the disc->EWA rendering difference (disc-era RV-06 proposals were false positives)
     ledger: llm_ledger.jsonl
   expected_latency_s: 25         # drives the viewer's progress bar
 
@@ -276,8 +277,16 @@ repair:                     # boundary repair over baseline leaves (pipeline/rep
   context:                  # proposal + SAM mask + visible support
     min_in_px: 30           # visible pixels inside masks (all views) before an object is considered
     member_frac: 0.6        # object visible-in-mask share to merge it whole
+    set: ewa-ewa            # association set building out/: <SAM/visibility renderer>-<proposal source>
+                            # (others -> out_ctx_<set>/); regions without a proposal of that source get no repair
     min_split_voxels: 15
-    fill_dist: 0.03         # unobserved voxels next to supported ones (occluded back side)
+    seen_eps: 0.02          # summed visibility weight below this = voxel unobserved by this candidate's views
+    min_coverage: 0.5       # whole-group claim needs this share of the group's voxels observed ...
+    spatial_frac: 0.8       # ... and this share within spatial_dist of a supported voxel
+    spatial_dist: 0.05
+    corroborate_overlap: 0.3  # same-class claims sharing this share of the smaller claim = one component, united
+    claim_margin: 0.2       # competing claims: winner must beat runner-up support by this, else ambiguous
+    provisional_frac: 0.1   # candidate losing/ambiguous on more than this share of its claim -> provisional
     min_candidate_voxels: 25
     cc_eps: 0.05
     cc_min_frac: 0.2
@@ -287,6 +296,11 @@ repair:                     # boundary repair over baseline leaves (pipeline/rep
 
 propose:                    # contextual proposals (pipeline/propose.py)
   seg_dir: out_geo          # segmentation shown in the fragment-ID overlay and used for association
+  renderer: ewa             # disc (baseline) | ewa (alpha-composited anisotropic Gaussians)
+  proposal_source: ewa      # legacy = pilot proposals (disc images, bound by key + cameras) | ewa | disc
+  render:
+    disc: {}
+    ewa: {r_max: 64, dilation: 0.3, w_min: 0.004}
   sam_model: facebook/sam2.1-hiera-tiny
   min_sam_score: 0.5
   box_expand: 0.2          # each side, fraction of the VLM box size (raw box still drawn)

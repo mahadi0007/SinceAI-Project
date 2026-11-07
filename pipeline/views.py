@@ -186,3 +186,134 @@ def mask_outline(im: Image.Image, mask: np.ndarray, color: tuple[int, int, int],
     edge = mask & ~(np.roll(mask, 1, 0) & np.roll(mask, -1, 0) & np.roll(mask, 1, 1) & np.roll(mask, -1, 1))
     a[edge] = color
     return Image.fromarray(a.astype(np.uint8))
+
+
+# ---------- EWA Gaussian splatting (CPU, NumPy) ----------
+
+@dataclass
+class SplatView:
+    """Alpha-composited Gaussian render with explicit per-Gaussian contribution weights.
+
+    rgb      (H,W,3) uint8   composited colour over the background
+    alpha    (H,W)   float32 accumulated opacity (1 - final transmittance)
+    depth    (H,W)   float32 MEDIAN depth (where transmittance crosses 0.5), inf if never
+    depth_exp(H,W)   float32 expected depth sum(w z)/sum(w) (diagnostic only)
+    frag_*   sparse contributions: pixel index, Gaussian index, weight w = alpha_i * T_i (>= w_min)
+    The weights are the visibility evidence: occluded Gaussians get T ~ 0, hence ~0 weight.
+    """
+    cam: Camera
+    rgb: np.ndarray
+    alpha: np.ndarray
+    depth: np.ndarray
+    depth_exp: np.ndarray
+    frag_pix: np.ndarray
+    frag_gid: np.ndarray
+    frag_w: np.ndarray
+
+    def top_id(self) -> np.ndarray:
+        """Dominant contributor per pixel (-1 if none) - for overlays only, not for support."""
+        HW = self.cam.W * self.cam.H
+        out = np.full(HW, -1, np.int64)
+        if len(self.frag_w):
+            o = np.lexsort((-self.frag_w, self.frag_pix))
+            p = self.frag_pix[o]
+            first = np.r_[True, p[1:] != p[:-1]]
+            out[p[first]] = self.frag_gid[o][first]
+        return out.reshape(self.cam.H, self.cam.W)
+
+
+def quat_cov(scales: np.ndarray, quats_wxyz: np.ndarray) -> np.ndarray:
+    from pipeline.load_splat import covariances
+    return covariances(scales, quats_wxyz)
+
+
+def render_ewa(cam: Camera, xyz: np.ndarray, rgb: np.ndarray, scales: np.ndarray, quats: np.ndarray,
+               opacity: np.ndarray, near: float = 0.05, far: float = 12.0, r_max: int = 64, tile: int = 64,
+               dilation: float = 0.3, w_min: float = 0.004, t_min: float = 1e-4,
+               bg: tuple[int, int, int] = (235, 235, 235)) -> SplatView:
+    """EWA splatting (Zwicker et al.; same model as 3DGS): 3D covariance R S S^T R^T from quaternion +
+    anisotropic scales, projected with the perspective Jacobian, +dilation px^2 low-pass, 3-sigma
+    footprint, front-to-back alpha compositing sorted by camera depth per pixel. View-independent colour
+    (SH degree 0). Global per-pixel depth sort (not per-tile), so no tile-boundary ordering artefacts."""
+    W, H = cam.W, cam.H
+    pc = (xyz - cam.C) @ cam.R.T
+    z = pc[:, 2]
+    keep = (z > near) & (z < far) & (opacity >= 1 / 255)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = cam.fx * pc[:, 0] / z + cam.cx
+        v = cam.fy * pc[:, 1] / z + cam.cy
+    keep &= (u > -r_max) & (u < W + r_max) & (v > -r_max) & (v < H + r_max)
+    idx = np.where(keep)[0]
+    P, zz = pc[idx], z[idx]
+    S = cam.R @ quat_cov(scales[idx], quats[idx]) @ cam.R.T                       # camera-frame covariance
+    J = np.zeros((len(idx), 2, 3))
+    J[:, 0, 0] = cam.fx / zz
+    J[:, 0, 2] = -cam.fx * P[:, 0] / zz ** 2
+    J[:, 1, 1] = cam.fy / zz
+    J[:, 1, 2] = -cam.fy * P[:, 1] / zz ** 2
+    C2 = J @ S @ np.transpose(J, (0, 2, 1))
+    a, b, c = C2[:, 0, 0] + dilation, C2[:, 0, 1], C2[:, 1, 1] + dilation
+    det = a * c - b * b
+    ok = det > 1e-12
+    lam = 0.5 * (a + c) + np.sqrt(np.maximum(0.25 * (a - c) ** 2 + b * b, 0))
+    r = np.minimum(np.ceil(3 * np.sqrt(lam)), r_max)
+    idx, zz, a, b, c, det, r = idx[ok], zz[ok], a[ok], b[ok], c[ok], det[ok], r[ok]
+    uu, vv = u[idx], v[idx]
+    ca, cb, cc = c / det, -b / det, a / det                                         # conic (inverse cov)
+    op = opacity[idx]
+    col = np.clip(rgb[idx], 0, 1)
+    x0 = np.clip(np.floor(uu - r), 0, W - 1).astype(np.int64)
+    x1 = np.clip(np.ceil(uu + r), 0, W - 1).astype(np.int64)
+    y0 = np.clip(np.floor(vv - r), 0, H - 1).astype(np.int64)
+    y1 = np.clip(np.ceil(vv + r), 0, H - 1).astype(np.int64)
+    fp, fg, fa, fz = [], [], [], []
+    for ty in range(0, H, tile):                                  # tiles only bound memory; sort is global
+        for tx in range(0, W, tile):
+            sel = np.where((x1 >= tx) & (x0 < tx + tile) & (y1 >= ty) & (y0 < ty + tile))[0]
+            if not len(sel):
+                continue
+            gx0, gx1 = np.maximum(x0[sel], tx), np.minimum(x1[sel], tx + tile - 1)
+            gy0, gy1 = np.maximum(y0[sel], ty), np.minimum(y1[sel], ty + tile - 1)
+            w_, h_ = gx1 - gx0 + 1, gy1 - gy0 + 1
+            n = w_ * h_
+            gi = np.repeat(sel, n)
+            start = np.repeat(np.cumsum(n) - n, n)
+            k = np.arange(n.sum()) - start
+            px = np.repeat(gx0, n) + k % np.repeat(w_, n)
+            py = np.repeat(gy0, n) + k // np.repeat(w_, n)
+            dx, dy = px + 0.0 - uu[gi], py + 0.0 - vv[gi]
+            power = -0.5 * (ca[gi] * dx * dx + cc[gi] * dy * dy) - cb[gi] * dx * dy
+            al = np.minimum(0.99, op[gi] * np.exp(np.minimum(power, 0)))
+            m = (al >= 1 / 255) & (power <= 0)
+            fp.append(py[m] * W + px[m]); fg.append(gi[m]); fa.append(al[m].astype(np.float32)); fz.append(zz[gi[m]])
+    pix = np.concatenate(fp) if fp else np.zeros(0, np.int64)
+    g = np.concatenate(fg) if fg else np.zeros(0, np.int64)
+    al = np.concatenate(fa).astype(np.float64) if fa else np.zeros(0)
+    dz = np.concatenate(fz) if fz else np.zeros(0)
+    o = np.lexsort((dz, pix))
+    pix, g, al, dz = pix[o], g[o], al[o], dz[o]
+    l1m = np.log1p(-al)
+    cs = np.cumsum(l1m)
+    seg_start = np.r_[True, pix[1:] != pix[:-1]]
+    first_idx = np.maximum.accumulate(np.where(seg_start, np.arange(len(pix)), 0))
+    before = cs - l1m - (cs[first_idx] - l1m[first_idx])                           # log T before this fragment
+    T = np.exp(before)
+    w = al * T
+    live = T > t_min
+    HW = W * H
+    wsum = np.bincount(pix[live], weights=w[live], minlength=HW)
+    img = np.empty((HW, 3))
+    for ch in range(3):
+        img[:, ch] = np.bincount(pix[live], weights=(w * col[g, ch])[live], minlength=HW)
+    img += (1 - wsum)[:, None] * (np.array(bg) / 255.0)
+    dexp = np.bincount(pix[live], weights=(w * dz)[live], minlength=HW) / np.maximum(wsum, 1e-9)
+    dexp[wsum < 1e-6] = np.inf
+    after = T * (1 - al)
+    cross = live & (T >= 0.5) & (after < 0.5)                                       # median depth fragment
+    dmed = np.full(HW, np.inf)
+    dmed[pix[cross]] = dz[cross]
+    keepw = live & (w >= w_min)
+    return SplatView(cam, (np.clip(img, 0, 1) * 255).astype(np.uint8).reshape(H, W, 3),
+                     wsum.reshape(H, W).astype(np.float32), dmed.reshape(H, W).astype(np.float32),
+                     dexp.reshape(H, W).astype(np.float32), pix[keepw].astype(np.int32),
+                     idx[g[keepw]].astype(np.int64), w[keepw].astype(np.float32))

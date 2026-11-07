@@ -25,6 +25,7 @@ class Scene:
     rgb: np.ndarray
     scales: np.ndarray
     opacity: np.ndarray
+    quats: np.ndarray          # (N,4) wxyz, normalised
     row_ids: np.ndarray
     vox_xyz: np.ndarray
     vox_frag: np.ndarray       # fine fragment per voxel point (-1 noise, -2 structure)
@@ -58,5 +59,14 @@ def load_scene(cfg: Cfg, seg_dir: str | Path) -> Scene:
         if [a["id"] for a in lab] == list(s["label_ids"]) and len(lab) == len(assets):
             assets = lab
     assert [a["id"] for a in assets] == list(s["label_ids"]), "assets do not match segment_points label_ids"
-    return Scene(d["xyz"].astype(np.float64), d["rgb"], d["scales"], d["opacity"], d["row_ids"],
+    return Scene(d["xyz"].astype(np.float64), d["rgb"], d["scales"], d["opacity"], d["quats_wxyz"], d["row_ids"],
                  s["xyz"].astype(np.float64), s["frag"], s["labels"], g_vox, assets, s["label_ids"], seg_dir)
+
+
+def seg_revision(seg_dir: str | Path) -> str:
+    """Segmentation revision: hash of the label array + asset ids (OBJ ids mean nothing across revisions)."""
+    import hashlib
+    s = np.load(ROOT / seg_dir / "segment_points.npz")
+    h = hashlib.sha256(s["labels"].tobytes())
+    h.update("|".join(map(str, s["label_ids"])).encode())
+    return h.hexdigest()[:16]
