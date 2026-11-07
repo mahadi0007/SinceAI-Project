@@ -157,7 +157,9 @@ viewer:
   box_thickness: 1.0        # screen px, all frames
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
-  all_label_scale: 0.6      # font scale for "Show all labels"
+  label_mode: Equipment    # Equipment (mapped + non-pipe objects) | All objects | Nearby only | Off
+  equipment_label_scale: 0.8  # font scale for equipment labels
+  all_label_scale: 0.55     # font scale for pipe/fitting labels in "All objects"
   other_label_scale: 0.75   # font scale for nearby objects without asset record
   near_label_skip: [pipe segment, pipe fitting/flange, other, wall]   # too many to label while walking
   pick_radius: 0.03         # click ray tolerance (units) ...
