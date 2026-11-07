@@ -157,6 +157,20 @@ viewer:
   box_thickness: 1.0        # screen px, all frames
   highlight_thickness: 3.5  # screen px, frames near the avatar
   path_lift: 0.02
+  use_tour: true            # walk out/tour.json (door -> warning assets -> target) if it exists
+  stop_box_thickness: 7.0   # frame around the equipment while the worker stops there (screen px)
+  stop_fill_opacity: 0.25   # translucent fill of the stopped-at equipment
+  stop_fill_pad: 0.03       # fill box slightly larger than the object box (units)
+  stop_blink_hz: 1.5        # blink rate while pausing
+  stop_label_scale: 1.2     # big status label above the equipment
+  display:                  # splat display: groups can be hidden in the viewer ("Scene display" panel)
+    show_ceiling: true
+    show_walls: true
+    ceiling_cut_h: 1.85     # splats higher than this above the floor = "ceiling" group (units; ceiling at ~2.04)
+    wall_band: 0.15         # splats this close to a wall plane = "walls" group
+    crop_outside_walls: true  # drop floaters outside the room
+    crop_margin: 0.15
+    dark_threshold: 0.0     # hide splats darker than this (0 = keep all, as originally; ~0.04 removes most dark haze)
   label_mode: Equipment    # Equipment (mapped + non-pipe objects) | All objects | Nearby only | Off
   equipment_label_scale: 0.8  # font scale for equipment labels
   all_label_scale: 0.55     # font scale for pipe/fitting labels in "All objects"
@@ -293,3 +307,9 @@ propose:                    # contextual proposals (pipeline/propose.py)
   min_confidence: 0.5       # VLM confidence to use a candidate for repair
   depth_gate_min: 0.15      # mask pixels deeper than front + max(min, size_factor * size) are background
   depth_gate_size: 1.2
+
+tour:                       # inspection tour: door -> warning assets (from Excel status) -> faulty target
+  conditions: [attention_required, degraded]   # which Current_State conditions become stops, most urgent first
+  max_stops: 5              # keeps the walk a sensible length for the demo
+  reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
+  pause_s: 2.0              # viewer pause at each stop

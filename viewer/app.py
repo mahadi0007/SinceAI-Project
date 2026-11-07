@@ -27,12 +27,26 @@ EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4),
 
 # ---------- data ----------
 
-def load_scene(cfg: Cfg) -> tuple[dict, dict]:
+def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
+    """Scene graph, walk path, and the inspection tour (out/tour.json) if enabled and present.
+    With a tour, the walk follows the tour points instead of the direct path."""
     with open(out_path(cfg, "scene_graph.json"), encoding="utf-8") as f:
         sg = json.load(f)
     with open(out_path(cfg, "path.json"), encoding="utf-8") as f:
         path = json.load(f)
-    return sg, path
+    tour = None
+    tp = out_path(cfg, "tour.json")
+    if cfg["viewer"].get("use_tour", True) and tp.exists():
+        with open(tp, encoding="utf-8") as f:
+            tour = json.load(f)
+        path = {**path, "points": tour["points"]}
+    return sg, path, tour
+
+
+def stop_text(stop: dict, i: int, n: int) -> str:
+    return (f"**Stop {i}/{n}: {stop['tag']}** · {stop['asset_class']} · {stop['condition_state']} · "
+            f"health **{stop['health_score']}** · {stop['issue_code']}"
+            + ("  \n_Faulty target: copilot diagnosis below._" if stop["kind"] == "target" else ""))
 
 
 def status_of(node: dict) -> str:
@@ -148,11 +162,18 @@ def selection_text(n: dict, u2m: float) -> str:
 class Sim:
     def __init__(self, cfg: Cfg) -> None:
         self.cfg, self.vc = cfg, cfg["viewer"]
-        self.sg, path = load_scene(cfg)
+        self.sg, path, self.tour = load_scene(cfg)
         self.nodes = [n for n in self.sg["objects"] if n["kind"] == "object"]
         self.pts = np.array(path["points"], np.float64)
         seg = np.linalg.norm(np.diff(self.pts, axis=0), axis=1)
         self.s = np.concatenate([[0], np.cumsum(seg)])
+        # distance along the walk at which each tour stop is reached (pauses happen there)
+        self.stops = self.tour["stops"] if self.tour else []
+        self.stop_s = [float(self.s[min(st["sample_index"], len(self.s) - 1)]) for st in self.stops]
+        self.next_stop = 0
+        self.pause_until = 0.0
+        self.face_target: np.ndarray | None = None   # avatar faces this point while stopped
+        self.stop_active: dict | None = None         # tour stop currently highlighted
         self.tree = cKDTree(np.array([n["center"] for n in self.nodes])[:, [0, 2]])
         self.max_half = max(float(np.hypot(n["extent"][0], n["extent"][2])) / 2 for n in self.nodes)
         self.target = next(n for n in self.nodes if n["id"] == self.sg["target"]["object_id"])
@@ -179,17 +200,56 @@ class Sim:
         self._build_gui()
         self.server.scene.on_click()(self.on_scene_click)
 
+    # --- splat display groups (ceiling / walls / room) ---
+    def _load_splat_groups(self) -> None:
+        """Load the splat once; tag every Gaussian as ceiling, wall or room, plus brightness/inside masks."""
+        d = load_splat(str(repo_path(self.cfg["paths"]["ply"])))
+        dc, sc_cfg = self.vc["display"], self.cfg["scene"]
+        x = d["xyz"]
+        self.sp = {"xyz": x, "rgb": d["rgb"], "opacity": d["opacity"][:, None]}
+        if self.vc["render_splats"]:
+            self.sp["cov"] = covariances(d["scales"], d["quats_wxyz"]).astype(np.float32)
+        h = sc_cfg["floor_y"] - x[:, 1]                                   # height above floor (up = -y)
+        walls = [p for p in self.cfg["segment"]["known_planes"] if p["label"] == "wall"]
+        near_wall = np.zeros(len(x), bool)
+        for p in walls:
+            near_wall |= np.abs(x[:, p["axis"]] - p["value"]) < dc["wall_band"]
+        xs = [p["value"] for p in walls if p["axis"] == 0]
+        zs = [p["value"] for p in walls if p["axis"] == 2]
+        m = dc["crop_margin"]
+        inside = ((x[:, 0] > min(xs) - m) & (x[:, 0] < max(xs) + m)
+                  & (x[:, 2] > min(zs) - m) & (x[:, 2] < max(zs) + m)) if xs and zs else np.ones(len(x), bool)
+        self.sp_lum = d["rgb"] @ np.array([0.299, 0.587, 0.114])
+        self.sp_inside = inside
+        self.sp_group = np.where(h > dc["ceiling_cut_h"], "ceiling", np.where(near_wall, "walls", "room"))
+        self.h_splat: dict[str, Any] = {}
+
+    def rebuild_splats(self, dark_threshold: float, crop: bool) -> dict[str, int]:
+        """(Re)send the three splat groups with the brightness / crop filter; keep their visibility."""
+        sc = self.server.scene
+        keep = self.sp_lum >= dark_threshold
+        if crop:
+            keep &= self.sp_inside
+        counts = {}
+        for g in ("room", "walls", "ceiling"):
+            m = keep & (self.sp_group == g)
+            vis = self.h_splat[g].visible if g in self.h_splat else self.vc["display"].get(f"show_{g}", True)
+            if self.vc["render_splats"]:
+                h = sc.add_gaussian_splats(f"/splat/{g}", centers=self.sp["xyz"][m], rgbs=self.sp["rgb"][m],
+                                           opacities=self.sp["opacity"][m], covariances=self.sp["cov"][m])
+            else:
+                h = sc.add_point_cloud(f"/splat/{g}", self.sp["xyz"][m],
+                                       (self.sp["rgb"][m] * 255).astype(np.uint8), point_size=self.vc["point_size"])
+            h.visible = vis
+            self.h_splat[g] = h
+            counts[g] = int(m.sum())
+        return counts
+
     # --- scene ---
     def _build_scene(self) -> None:
         sc = self.server.scene
-        d = load_splat(str(repo_path(self.cfg["paths"]["ply"])))
-        if self.vc["render_splats"]:
-            sc.add_gaussian_splats("/splat", centers=d["xyz"], rgbs=d["rgb"],
-                                   opacities=d["opacity"][:, None],
-                                   covariances=covariances(d["scales"], d["quats_wxyz"]).astype(np.float32))
-        else:
-            sc.add_point_cloud("/splat", d["xyz"], (d["rgb"] * 255).astype(np.uint8),
-                               point_size=self.vc["point_size"])
+        self._load_splat_groups()
+        self.rebuild_splats(self.vc["display"]["dark_threshold"], self.vc["display"]["crop_outside_walls"])
         segs, cols = edges_for(self.nodes, self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
@@ -212,6 +272,12 @@ class Sim:
         p = self.pts + lift
         sc.add_line_segments("/path", np.stack([p[:-1], p[1:]], 1).astype(np.float32),
                              tuple(self.vc["path_color"]), thickness=4.0, thickness_units="screen")
+        for k, st in enumerate(self.stops, 1):              # numbered tour stop markers on the floor
+            q = p[min(st["sample_index"], len(p) - 1)]
+            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
+            sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q))
+            sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}", position=(q[0], q[1] - 0.12, q[2]),
+                         anchor="bottom-center", font_screen_scale=0.8)
         t = self.target
         sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
@@ -219,6 +285,10 @@ class Sim:
         self.h_highlight = sc.add_line_segments("/highlight", *edges_for([], self.vc["colors"]),
                                                 thickness=self.vc["highlight_thickness"],
                                                 thickness_units="screen")
+        self.h_stop_box = sc.add_line_segments("/stop/box", *edges_for([], self.vc["colors"]),
+                                               thickness=self.vc["stop_box_thickness"], thickness_units="screen")
+        self.h_stop_fill: Any = None
+        self.h_stop_label: Any = None
         self.h_selected = sc.add_line_segments("/selected", *edges_for([], self.vc["colors"]),
                                                thickness=self.vc["selected_thickness"], thickness_units="screen")
         # one persistent label per object; which ones are visible depends on the Labels menu
@@ -270,7 +340,9 @@ class Sim:
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
-        if self.arrived:                                                # face the target
+        if self.face_target is not None:                                # at a tour stop: face the equipment
+            tangent = self.face_target - p
+        elif self.arrived:                                              # face the target
             tangent = np.array(self.target["center"]) - p
         else:
             tangent = self.tangent()
@@ -307,6 +379,29 @@ class Sim:
         self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
         self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
         self.cb_boxes = g.add_checkbox("Show all frames", True)
+        dc = self.vc["display"]
+        with g.add_folder("Scene display", expand_by_default=False):
+            cb_ceiling = g.add_checkbox("Show ceiling", dc["show_ceiling"])
+            cb_walls = g.add_checkbox("Show walls", dc["show_walls"])
+            cb_crop = g.add_checkbox("Crop outside walls", dc["crop_outside_walls"])
+            sl_dark = g.add_slider("Hide dark splats below", 0.0, 0.2, 0.01, dc["dark_threshold"])
+            b_apply = g.add_button("Apply filter")
+            md_disp = g.add_markdown("")
+
+        @cb_ceiling.on_update
+        def _(_e: Any) -> None:
+            self.h_splat["ceiling"].visible = cb_ceiling.value
+
+        @cb_walls.on_update
+        def _(_e: Any) -> None:
+            self.h_splat["walls"].visible = cb_walls.value
+
+        @b_apply.on_click
+        def _(_e: Any) -> None:
+            md_disp.content = "_Updating splats…_"
+            c = self.rebuild_splats(float(sl_dark.value), bool(cb_crop.value))
+            md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
+                               f"(of {len(self.sp_lum):,})")
         self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
         with g.add_folder("Boundary repair: before / after"):
             g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
@@ -365,6 +460,16 @@ class Sim:
             b_fly = g.add_button("Fly to object", visible=True)
             self.b_identify = g.add_button("Ask vision model what this is (paid)")
             self.md_identify = g.add_markdown("")
+        with g.add_folder("Inspection tour"):
+            if self.tour:
+                route = " → ".join(["door"] + [s["tag"] for s in self.stops])
+                mode = "from Excel status" if self.tour["mode"] == "auto_excel" else "manual list"
+                skipped = ", ".join(f"{s['tag']}" for s in self.tour["skipped"]) or "none"
+                g.add_markdown(f"Tour {mode}: {route}  \n{self.tour['length']:.1f} u "
+                               f"(~{self.tour['length'] * self.cfg['scene']['units_to_m']:.0f} m) · "
+                               f"skipped (unreachable/limit): {skipped}")
+            self.md_stop = g.add_markdown("_Press Play to start the tour._" if self.tour
+                                          else "_No tour: run `python -m pipeline.tour`._")
         with g.add_folder("Nearby assets"):
             self.md_near = g.add_markdown("")
 
@@ -418,12 +523,18 @@ class Sim:
         def _(_e: Any) -> None:
             self.playing, self.dist = False, 0.0
             self.leave_target()
+            self.next_stop, self.pause_until = 0, 0.0
+            self.clear_stop_highlight()
+            if self.tour:
+                self.md_stop.content = "_Press Play to start the tour._"
             self.update()
 
         @self.sl_pos.on_update
         def _(_e: Any) -> None:
             if not self.playing:
                 self.dist = float(self.sl_pos.value)
+                self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
+                self.clear_stop_highlight()
                 self.update()
 
         @self.cb_boxes.on_update
@@ -632,13 +743,66 @@ class Sim:
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
         while True:
-            if self.playing:
-                self.dist = min(self.dist + float(self.sl_speed.value) * dt, float(self.s[-1]))
+            now = time.time()
+            if self.playing and now < self.pause_until and self.stop_active is not None:
+                self.blink_stop(now)                                   # pausing at a stop
+            elif self.playing and self.stop_active is not None and self.stop_active["kind"] != "target":
+                self.clear_stop_highlight()                            # walking on to the next stop
+            if self.playing and now >= self.pause_until:
+                nxt = self.stop_s[self.next_stop] if self.next_stop < len(self.stops) else float(self.s[-1])
+                self.dist = min(self.dist + float(self.sl_speed.value) * dt, nxt, float(self.s[-1]))
                 self.sl_pos.value = round(self.dist, 2)
                 self.update()
+                if self.next_stop < len(self.stops) and self.dist >= self.stop_s[self.next_stop] - 1e-6:
+                    self.reach_stop(self.next_stop)
                 if self.dist >= self.s[-1]:
                     self.playing = False
             time.sleep(dt)
+
+    def reach_stop(self, k: int) -> None:
+        """Pause at tour stop k and show its Excel status (the last stop is the faulty target)."""
+        st = self.stops[k]
+        self.md_stop.content = stop_text(st, k + 1, len(self.stops))
+        self.next_stop = k + 1
+        self.highlight_stop(st)
+        if st["kind"] != "target":
+            self.pause_until = time.time() + float(self.tour["pause_s"])
+
+    def highlight_stop(self, st: dict) -> None:
+        """Thick coloured frame + translucent fill + big label on the stop's equipment; worker faces it."""
+        n = next(x for x in self.nodes if x["id"] == st["object_id"])
+        col = self.vc["highlight_colors"].get(st["condition_state"], [255, 0, 0])
+        segs, _ = edges_for([n], self.vc["colors"])
+        self.h_stop_box.points = segs
+        self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
+        self.h_stop_box.visible = True
+        lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
+        pad = self.vc["stop_fill_pad"]
+        self.h_stop_fill = self.server.scene.add_box(
+            "/stop/fill", tuple(col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
+            opacity=self.vc["stop_fill_opacity"], cast_shadow=False, receive_shadow=False)
+        self.h_stop_label = self.server.scene.add_label(
+            "/stop/label", f"{st['tag']} · {st['condition_state']} · health {st['health_score']} · {st['issue_code']}",
+            position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
+            anchor="bottom-center", font_screen_scale=self.vc["stop_label_scale"])
+        self.stop_active = st
+        self.face_target = np.array(n["center"], np.float64)
+        self.pose_avatar(self.position(), moving=False)
+
+    def blink_stop(self, now: float) -> None:
+        on = int(now * 2 * self.vc["stop_blink_hz"]) % 2 == 0
+        self.h_stop_box.visible = on
+        if self.h_stop_fill is not None:
+            self.h_stop_fill.visible = on
+
+    def clear_stop_highlight(self) -> None:
+        self.h_stop_box.points, self.h_stop_box.colors = edges_for([], self.vc["colors"])
+        for h in (self.h_stop_fill, self.h_stop_label):
+            if h is not None:
+                h.remove()
+        self.h_stop_fill = self.h_stop_label = None
+        self.stop_active = None
+        self.face_target = None
 
 
 if __name__ == "__main__":
