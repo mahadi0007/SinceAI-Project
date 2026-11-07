@@ -39,7 +39,7 @@ API = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format={fmt
 LOTO_RE = re.compile(r"\b(LOTO|lockout|lock-out|permit)", re.I)
 
 
-CODE_RE = re.compile(r"\b[A-Za-z]+(?:_[A-Za-z]+)+\b")      # attention_required, CAVITATION_RISK
+CODE_RE = re.compile(r"\b(?:[A-Za-z]+(?:_[A-Za-z]+)+|(?!LOTO\b)[A-Z]{4,})\b")  # attention_required, NORMAL
 
 
 def _say(text: str) -> str:
@@ -48,15 +48,15 @@ def _say(text: str) -> str:
     return t[:1].upper() + t[1:]
 
 
-def speech_text(d: dict, tag: str, vc: Cfg) -> str:
-    """'Arrived at P-002. <summary> First checks: 1. … 2. … <safety line>'."""
+def speech_text(d: dict, tag: str, vc: Cfg, opener: str | None = None) -> str:
+    """'<opener> <summary> First checks: 1. … 2. … <safety line>'; opener defaults to 'Arrived at <tag>.'"""
     raw = [c.get("text", "") if isinstance(c, dict) else str(c) for c in d.get("next_safe_checks") or []]
     checks = [_say(t).rstrip(".") for t in raw if t.strip() and not LOTO_RE.search(t)]
     checks = checks[:vc["max_checks"]]
     summary = _say(d.get("condition_summary") or "")
     if summary and summary[-1] not in ".!?":
         summary += "."
-    parts = [f"Arrived at {tag}.", summary]
+    parts = [opener if opener is not None else f"Arrived at {tag}.", summary]
     if checks:
         parts.append("First checks: " + " ".join(f"{i + 1}. {c}." for i, c in enumerate(checks)))
     parts.append(vc["safety_line"])
@@ -102,9 +102,9 @@ def synthesize(text: str, cfg: Cfg) -> bytes | None:
     return audio
 
 
-def briefing(d: dict, tag: str, cfg: Cfg) -> tuple[str, bytes | None]:
+def briefing(d: dict, tag: str, cfg: Cfg, opener: str | None = None) -> tuple[str, bytes | None]:
     """Spoken script + mp3 bytes for a diagnosis dict from any copilot model."""
-    text = speech_text(d, tag, cfg["viewer"]["voice"])
+    text = speech_text(d, tag, cfg["viewer"]["voice"], opener)
     return text, synthesize(text, cfg)
 
 

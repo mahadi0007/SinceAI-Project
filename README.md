@@ -84,3 +84,36 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
   artifacts of `out_manual/` are listed as stale until regenerated (label -> navgrid -> mapping -> tour).
 - Disputed voxels (inside the mask in one view, visibly outside in another) are excluded and reported; unseen voxels
   are never claimed except with a whole object that passes support + coverage + spatial checks (reported as inferred).
+
+## MCP server (ask the copilot from Claude Code / Claude Desktop)
+
+`mcp_server.py` exposes the field-service data and actions as MCP tools (thin wrapper over `copilot/tools.py`):
+`search_assets`, `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
+`plan_tour`, `draft_work_order`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
+`walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
+
+- **Claude Code:** `.mcp.json` registers the server as `valmet-copilot`; open Claude Code in this folder and approve it.
+- **Claude Desktop:** add to `claude_desktop_config.json`:
+  `"valmet-copilot": {"command": "<repo>/.venv/Scripts/python.exe", "args": ["<repo>/mcp_server.py"]}`
+- Example questions: *"Which pumps need attention?"*, *"Why is P-002 flagged? Cite evidence."*, *"Take me to M-006 in the viewer."*,
+  *"Plan a tour past CV-003 and M-006."*
+- Safety and cost: data tools are read-only, work orders are drafts, no physical control; only
+  `diagnose(allow_paid=true)` can spend a request from the team's paid budget.
+
+## Viewer chat ("Ask the MCP")
+
+The viewer panel "Ask the MCP" has a chat box. It works on every computer, with or without Claude:
+
+| Question type | Who answers | Needs |
+|---|---|---|
+| Quick commands: `take me to M-006`, `show P-005`, `start tour`, `tour past CV-003 and M-006`, `which assets need attention`, `status of P-002`, `help` | the viewer itself, instantly | nothing (free) |
+| Anything else, e.g. *"take me to the motor that is overheating and tell me why"* | Claude Code in the background, using only our MCP tools (it can also move the worker / camera) | Claude Code installed and logged in |
+
+The chat panel shows the Claude status when the viewer starts:
+- **🤖 Claude ready (subscription)**: free-form questions work; they use your own Claude Pro/Max plan (no extra cost).
+- **⚠️ API key**: works, but each Claude question is billed per use.
+- **⚠️ Not installed / not logged in**: only quick commands work. To enable: install Claude Code
+  (https://claude.com/claude-code or the VS Code / Antigravity extension), run `claude` in a terminal, type `/login`,
+  then restart the viewer. If it is installed in an unusual place, set `chat.claude_path` in `config.yaml`.
+
+Claude never spends the team's paid Featherless budget unless you explicitly ask for a fresh paid diagnosis.

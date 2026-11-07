@@ -241,6 +241,14 @@ viewer:
     max_checks: 3                      # next safe checks read aloud
     safety_line: "Site procedures, lockout-tagout and permits apply."
     arrive_gap: 0.6                    # worker counts as "in front of" the target within this box gap (units)
+  pov:                      # "Worker view (POV)": camera at the worker's eyes (height = avatar head_h)
+    fov_deg: 75             # human-like field of view
+    eye_forward: 0.12       # eye sits this far in front of the head centre (units), so the head doesn't block it
+    look_ahead: 2.0         # while walking, look at a point this far ahead ...
+    look_down: 0.35         # ... and this much lower (units): eyes on the floor ahead, like a person walking
+    smoothing: 0.2          # 0..1 per frame (20 fps): lower = slower, smoother head turns
+    max_look_down_deg: 20   # at a stop the head turns to the equipment but tilts at most this far down ...
+    max_look_up_deg: 25     # ... or up (box centres of floor pumps / overhead valves are near floor / ceiling)
 
 evidence:
   samples_per_day: 48           # 30-min telemetry
@@ -340,3 +348,16 @@ tour:                       # inspection tour: door -> warning assets (from Exce
   max_stops: 5              # keeps the walk a sensible length for the demo
   reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
   pause_s: 2.0              # viewer pause at each stop
+
+chat:                       # viewer chat: quick commands (free) -> Claude Code headless + our MCP server
+  quick_commands: true      # handle "take me to M-006", "show P-005", "start tour", ... locally, instantly
+  claude_path: auto         # auto = `claude` on PATH or the binary bundled with the Claude Code editor extension
+  model: null               # null = your Claude Code default
+  timeout_s: 150
+  system_prompt: >-
+    You are the field-service copilot inside a 3D viewer of an industrial equipment room. Answer in at most
+    8 short lines of markdown. Use the valmet-copilot tools; ground statements in tool results and cite
+    evidence IDs (TEL-, EVT-, WO-, CASE-, DOC-, DQ-). If the user wants to see, find, go to or tour
+    something, call show_in_viewer, walk_in_viewer or tour_in_viewer. Use diagnose with allow_paid=false
+    unless the user explicitly asks for a fresh paid diagnosis. Never recommend autonomous physical action;
+    recommend verification and escalation (site procedures, LOTO, permits apply).
