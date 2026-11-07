@@ -17,14 +17,14 @@ All tunable values are in `config.yaml`.
 | 3. Navigation | `pipeline/navgrid.py`: x–z occupancy grid, obstacles inflated by avatar radius, A*, line-of-sight smoothing, clearance check | `path.json`, `navgrid.png` |
 | 4. Mapping | `pipeline/mapping.py`: Excel assets → objects (label match, geometry rule, seeded fallback) with explicit confidence | `scene_graph.json`, `scene_anchors.csv` |
 | 5. Copilot | `copilot/evidence.py` builds the evidence pack; `copilot/agent.py` runs Gemini under the DOC-RAG-GUIDE + DOC-FIELD-SAFETY rules, then checks every cited ID | `diagnosis_<tag>.json` |
-| 6. Viewer | `viewer/app.py`: Viser scene with splats, frames, walking worker, proximity panel, click-to-inspect, copilot panel | http://localhost:8080 |
+| 6. Viewer | `viewer/app.py`: Viser scene with splats, frames, walking worker, proximity panel, click-to-inspect, copilot panel; on arrival the worker faces the target and `copilot/voice.py` reads the validated diagnosis aloud (ElevenLabs) | http://localhost:8080 |
 
 ## Setup
 
 ```bash
 python -m venv .venv            # Python 3.12 tested
 .venv/Scripts/pip install -r requirements.txt     # Windows (use .venv/bin/pip on Linux/macOS)
-cp .env.example .env            # put your FEATHERLESS_API_KEY in .env
+cp .env.example .env            # put your FEATHERLESS_API_KEY (and optional ELEVENLABS_API_KEY) in .env
 ```
 
 Put the challenge files in `data/` (not in git):
@@ -45,6 +45,8 @@ python -m pipeline.label        # --rules-only: no requests (paid budget: copilo
 python -m pipeline.navgrid
 python -m pipeline.mapping
 python -m copilot.agent P-002   # optional: diagnosis from the command line
+python -m copilot.voice --dummy --play   # test the ElevenLabs voice with a sample diagnosis (no LLM/data)
+python -m copilot.voice P-002   # optional: build/cache the spoken briefing (out/voice_cache/)
 python -m viewer.app            # open http://localhost:8080 and press Play
 ```
 
