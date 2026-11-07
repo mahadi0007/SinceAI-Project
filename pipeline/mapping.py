@@ -229,7 +229,8 @@ def scene_graph(objs: list[Obj], m: Mapper, xl: dict[str, pd.DataFrame], path: d
                                   "bbox_min", "bbox_max", "n_points", "color")}
         node["label"] = o.get("label") or o["hint"] or ("structure" if o["kind"] == "structure" else "object")
         for k in ("label_confidence", "label_source", "label_model", "label_reason", "label_vlm", "features",
-                  "fragments", "baseline_ids", "repair", "assembly"):
+                  "fragments", "baseline_ids", "repair", "assembly", "manual", "label_manual_class",
+                  "label_stale", "label_before_manual", "manual_changes"):
             if k in o:
                 node[k] = o[k]
         node["obb"] = o.get("obb", {})

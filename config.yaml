@@ -79,6 +79,18 @@ label:
   workers: 1                # one request at a time (paid; budget in copilot.budget)
   max_batches: 1            # per run; null = all (only after the pilot justifies it)
   vision_sources: [featherless_vision, gemini_vision]   # label_source values that count as VLM evidence
+  manual_sources: [manual_review]       # reviewer-confirmed component CLASS (never asset identity)
+  manual_class_vocab:                   # correction-tool class -> label vocab
+    pump: pump
+    motor: motor
+    control valve: control valve
+    sensor: pressure transmitter/gauge
+    vessel: tank/vessel
+    pipe run: pipe segment
+  manual_label_overrides:               # per component id, reviewer decision (blue electric actuators = control valves)
+    MC-0006: control valve
+    MC-0007: control valve
+    MC-0008: manual valve/handwheel
   min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
   rules_conf: 0.4
   member_dist: 0.03         # full-res splat point -> object if within this of a segmented point
@@ -149,6 +161,58 @@ mapping:
 
 viewer:
   port: 8080
+  splat_owner:              # bim_view: which object each Gaussian moves with
+    k: 8                    # nearest voxels voting
+    max_size: 0.04          # Gaussian size added to label.member_dist as reach, capped (units)
+    eps: 0.005              # vote weight = 1 / (dist + eps)
+  absorb:                   # bim_view: small objects (and noise) enclosed by a larger one move with it
+    voxel: 0.05             # occupancy grid (m, IFC frame), dilated by one cell
+    max_part_points: 300
+    min_leader_points: 1000
+    inside_frac: 0.7        # share of a part's points inside the larger object
+    leader_skip: [pipe segment, pipe fitting/flange, wall]
+  sam:                      # bim_view smart select: SAM 2.1 (propose.sam_model) on a render of the clicked view
+    width: 640              # render width (px)
+    capture_timeout: 5      # s to wait for the browser's frame (else the approximate render is used)
+    max_mask_frac: 0.4      # masks covering more of the view are ignored
+    min_mask_px: 300        # smaller masks are ignored
+    min_score: 0.5          # pick the smallest mask (score >= this) holding member_frac of the clicked segment,
+                            # else the best-scored one
+    max_spill: 3.0          # mask pixels outside the clicked segment at most this x its visible footprint
+    member_frac: 0.6        # object visible-in-mask share to take it whole (both sides)
+    min_visible_px: 20
+    depth_gate_min: 0.15    # m behind the mask's front still counted (or depth_gate_size x mask size)
+    depth_gate_size: 1.2
+    thickness: 0.03         # m: Gaussians this close behind a selected visible one come along
+  removable:                # viewer/removable.py: objects that cut out cleanly (only these are editable in viewer.app)
+    port: 8098
+    include: [OBJ-0045, OBJ-0030, OBJ-0035, OBJ-0048, OBJ-0073]  # hand-confirmed (out_geo ids); empty = run the SAM check
+    skip_labels: [pipe segment, pipe fitting/flange, wall]
+    min_points: 150
+    min_extent_m: 0.15
+    max_extent_m: 2.0
+    max_contact: 0.15       # share of the object's voxels next to another object / wall (floor ok)
+    max_hole: 0.1           # foreign Gaussians left inside its volume / its own Gaussians
+    views: 4                # SAM views around the object
+    candidates: 12          # directions tried; the views with the most visible object pixels are kept
+    near_frac: 0.5          # a candidate is blocked when over max_near of the image is closer than near_frac * distance
+    max_near: 0.1
+    max_empty: 0.3          # or over max_empty is outside the scan
+    elev: 0.45              # rad above horizontal
+    min_dist_m: 1.2
+    dist_factor: 1.6        # x object diagonal
+    width: 640              # frame height follows the browser's aspect
+    fov_deg: 55
+    min_visible_px: 400
+    min_score: 0.5
+    min_prec: 0.85          # SAM mask share inside the object's visible footprint (else the object is split)
+    min_rec: 0.7            # footprint share inside the SAM mask (else fused with something; footprint discs ~0.8)
+    box_expand: 0.15        # box prompt margin, fraction of the footprint size per side
+    max_edge_frac: 0.15     # mask on more of the box border than this: the object continues (split) -> view fails
+    min_ncc: 0.3            # browser frame must match our render of the same camera (else re-grabbed)
+    min_views: 2
+    agree_frac: 0.75        # share of usable views that must agree
+    load_wait_s: 15
   proximity_radius: 1.6     # distance avatar -> object box (x-z)
   walk_speed: 0.5           # units/s (path is ~4.3 units -> ~9 s walk)
   fps: 20
@@ -179,13 +243,26 @@ viewer:
   pick_radius: 0.03         # click ray tolerance (units) ...
   pick_radius_per_unit: 0.01  # ... growing with distance
   selected_color: [255, 0, 255]
+  movable_color: [0, 220, 120]  # "Show movable objects" frames (objects in removable_rows.npz)
+  duplicate_offset: [0.5, 0.0, 0.5]  # scene units; a copy is placed beside the original
   selected_thickness: 5.0
+  selected_fill_opacity: 0.22  # translucent fill of the selected object (frame + fill in selected_color)
   fly_min_dist: 1.0
   fly_dist_factor: 2.0
   fly_height: 0.3
   path_color: [220, 20, 60]
   avatar:                   # articulated worker; lengths below are for scale 1.0 (~1.73 m at 1 u = 1.15 m)
     scale: 1.0                    # overall size multiplier (1.0 = values below as written)
+    rigged:                       # Mixamo worker (README "Worker avatar"); missing files -> box figure below
+      enabled: true
+      walk_glb: data/avatar/walking.glb   # character + "Walking" (In Place), converted FBX -> GLB
+      idle_glb: data/avatar/idle.glb      # optional idle animation for the same skeleton (without skin)
+      height_m: 1.70
+      size: 1.0                     # visual multiplier on height_m (units_to_m is an estimate);
+                                    # tune live with More -> View -> Worker size
+      cycle_m: 1.35                 # distance covered by one walk-animation cycle (2 steps); sets step timing
+      fps: 30                       # animation sampling rate (idle uses half)
+      skip_parts: [Ch17_Eyelashes]  # tiny/transparent parts not worth a mesh
     hip_h: 0.72
     hip_dx: 0.08
     leg: [0.11, 0.70, 0.13]       # box dims x, length, z
@@ -229,6 +306,14 @@ viewer:
     max_checks: 3                      # next safe checks read aloud
     safety_line: "Site procedures, lockout-tagout and permits apply."
     arrive_gap: 0.6                    # worker counts as "in front of" the target within this box gap (units)
+  pov:                      # "Worker view (POV)": camera at the worker's eyes (height = avatar head_h)
+    fov_deg: 75             # human-like field of view
+    eye_forward: 0.12       # eye sits this far in front of the head centre (units), so the head doesn't block it
+    look_ahead: 2.0         # while walking, look at a point this far ahead ...
+    look_down: 0.35         # ... and this much lower (units): eyes on the floor ahead, like a person walking
+    smoothing: 0.2          # 0..1 per frame (20 fps): lower = slower, smoother head turns
+    max_look_down_deg: 20   # at a stop the head turns to the equipment but tilts at most this far down ...
+    max_look_up_deg: 25     # ... or up (box centres of floor pumps / overhead valves are near floor / ceiling)
 
 evidence:
   samples_per_day: 48           # 30-min telemetry
@@ -308,9 +393,49 @@ propose:                    # contextual proposals (pipeline/propose.py)
   depth_gate_min: 0.15      # mask pixels deeper than front + max(min, size_factor * size) are background
   depth_gate_size: 1.2
 
+correct:                    # guided manual boundary correction (pipeline/correct.py, api/annotate.py)
+  base_seg: out             # segmentation version being corrected (never modified)
+  out_seg: out_manual       # separate version, written only by the explicit Apply action
+  store: review/corrections # reviewer prompts, masks, revisions, undo history
+  renderer: ewa             # calibrated renders + contribution weights used for 2D->3D support
+  port: 8091                # correction page (embedded in the viewer; standalone: python -m api.annotate)
+  viser_port: 8081          # standalone 3D preview only
+  classes: [unknown, pump, motor, valve, control valve, sensor, vessel, pipe run, other]
+  two_view_min_agree: 0.3   # share of the selection inside the mask in >= 2 views ...
+  max_disagreement: 0.15    # ... and disputed share at most this -> "two-view" evidence
+  guide_max_points: 6000
+  rank_depth_tol: 0.05
+  uncertain_radius: 0.08    # unseen points of touched objects this close to the selection are reported uncertain
+
 tour:                       # inspection tour: door -> warning assets (from Excel status) -> faulty target
   stops: []                 # manual route: tags in visiting order, e.g. [CV-003, M-006]; [] = automatic from Excel
   conditions: [attention_required, degraded]   # which Current_State conditions become stops, most urgent first
   max_stops: 5              # keeps the walk a sensible length for the demo
   reach: 1.6                # stop is reachable if walkable floor is within this of its box (1.6 includes M-006 in its corner)
   pause_s: 2.0              # viewer pause at each stop
+  brief_at_stops: true      # at each warning stop the copilot speaks its summary; the stop lasts until it ends
+  brief_wait_s: 12          # longest wait for a stop's summary audio to be ready (first time: ElevenLabs call)
+  brief_gap_s: 1.0          # short pause after the summary before walking on
+
+chat:                       # viewer chat: quick commands (free) -> Claude Code headless + our MCP server
+  quick_commands: true      # handle "take me to M-006", "show P-005", "start tour", ... locally, instantly
+  claude_path: auto         # auto = `claude` on PATH or the binary bundled with the Claude Code editor extension
+  model: null               # null = your Claude Code default
+  timeout_s: 150
+  system_prompt: >-
+    You are the field-service copilot inside a 3D viewer of an industrial equipment room. Answer in at most
+    8 short lines of markdown. Use the valmet-copilot tools; ground statements in tool results and cite
+    evidence IDs (TEL-, EVT-, WO-, CASE-, DOC-, DQ-). If the user wants to see, find, go to or tour
+    something, call show_in_viewer, walk_in_viewer or tour_in_viewer. Use diagnose with allow_paid=false
+    unless the user explicitly asks for a fresh paid diagnosis. Never recommend autonomous physical action;
+    recommend verification and escalation (site procedures, LOTO, permits apply).
+ifc:
+  min_pipe_linearity: 0.6       # below this a "pipe segment" becomes a box
+  snap_deg: 10                  # snap pipe axes within this of vertical / room axes
+  join_gap_m: 0.15              # extend pipe ends this close to another pipe to meet it
+  max_pipe_rms_mm: 30           # pipe fits noisier than this are meshed from the scan instead
+  mesh_voxel_m: 0.03            # scan-mesh resolution (segmentation points are ~2.3 cm apart)
+  mesh_max_tris: 2500           # per object, after decimation
+  fittings_as_flanges: false    # true = catalog flange on the nearest pipe (~10 cm off the scan); false = scan mesh
+  flange_snap_m: 0.25           # fitting within this of a pipe axis becomes a flange on that pipe
+  floor_snap_m: 0.5             # pumps/motors whose bottom is this close above the floor are stood on it

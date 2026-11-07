@@ -14,14 +14,57 @@ from typing import Any
 import numpy as np
 import viser
 from scipy.spatial import cKDTree
+from viser.transforms import SO3
 
-from copilot.agent import diagnose, to_markdown
+from copilot.agent import STATUS_DOT, diagnose, to_markdown
+from copilot.card import DETAIL_SECTIONS, asset_card, asset_details
+from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
 from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
 
 Cfg = dict[str, Any]
-IDLE_TEXT = "_Press Play: the copilot briefs the worker once they stand in front of the target._"
+# Viser renders markdown tables as Mantine tables without borders; this <style> (injected once through an
+# HTML widget) gives every table in the panel cell borders, a shaded header row and compact padding.
+TABLE_CSS = """<style>
+.mantine-Table-table { border-collapse: collapse !important; width: 100%; max-width: 100%; margin: 4px 0 8px;
+  font-size: 0.9em; }
+.mantine-Table-table th, .mantine-Table-table td {
+  border: 1px solid #c9ced6 !important; padding: 3px 5px !important; vertical-align: top;
+  overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+.mantine-Table-table:has(th:nth-child(5)) { font-size: 0.84em; }   /* wide tables: smaller text so they fit */
+.mantine-Table-table:has(th:nth-child(5)) th, .mantine-Table-table:has(th:nth-child(5)) td {
+  padding: 3px 4px !important; }
+.mantine-Table-table thead th { background: #eef1f5; font-weight: 600; text-align: left !important; }
+.mantine-Table-table tbody tr:nth-child(even) td { background: #f8f9fb; }
+[data-mantine-color-scheme="dark"] .mantine-Table-table th,
+[data-mantine-color-scheme="dark"] .mantine-Table-table td { border-color: #4a4f57 !important; }
+[data-mantine-color-scheme="dark"] .mantine-Table-table thead th { background: #2c2f34; }
+[data-mantine-color-scheme="dark"] .mantine-Table-table tbody tr:nth-child(even) td { background: #25272b; }
+/* hover info (viser buttons ignore `hint`, so sections get an ⓘ line that opens an explanation) */
+.vtip { position: relative; display: inline-block; cursor: help; font-size: 0.86em; color: #4c6ef5;
+  margin: 0 0 4px; }
+.vtip .vtip-box { visibility: hidden; opacity: 0; transition: opacity 0.12s ease-out;
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 1000; width: max-content; max-width: 300px;
+  padding: 6px 10px; border-radius: 6px; line-height: 1.35; font-size: 0.95em;
+  background: #25262b; color: #f1f3f5; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); pointer-events: none; }
+.vtip .vtip-box::before { content: ""; position: absolute; top: -5px; left: 12px; border: 5px solid transparent;
+  border-top: 0; border-bottom-color: #25262b; }
+.vtip:hover .vtip-box { visibility: visible; opacity: 1; }
+/* on/off options in the panel (Use POV, Worker view, Show all frames, ...) as toggle switches; viser has no
+   switch widget, so its checkbox is restyled. Panel checkboxes are size "xs" (viser's own settings menu uses
+   "sm" and already has real switches), which keeps that menu unchanged. */
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-inner {
+  width: 36px !important; height: 20px !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-input {
+  appearance: none; width: 36px !important; height: 20px !important; border-radius: 10px !important;
+  border: none !important; cursor: pointer; transition: background 0.15s ease;
+  background: radial-gradient(circle at 10px 50%, #fff 7px, transparent 7.5px), #ced4da !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-input:checked {
+  background: radial-gradient(circle at 26px 50%, #fff 7px, transparent 7.5px),
+              var(--mantine-color-blue-filled, #228be6) !important; }
+.mantine-Checkbox-root[data-size="xs"] .mantine-Checkbox-icon { display: none !important; }
+</style>"""
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
 
@@ -30,6 +73,11 @@ EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4),
 def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
     """Scene graph, walk path, and the inspection tour (out/tour.json) if enabled and present.
     With a tour, the walk follows the tour points instead of the direct path."""
+    from pipeline.correct import downstream_stale
+    for name in ("scene_graph.json", "path.json"):
+        why = downstream_stale(out_path(cfg, name).parent, name)
+        if why:
+            raise SystemExit(f"[viewer] {why}")
     with open(out_path(cfg, "scene_graph.json"), encoding="utf-8") as f:
         sg = json.load(f)
     with open(out_path(cfg, "path.json"), encoding="utf-8") as f:
@@ -74,6 +122,15 @@ def stop_text(stop: dict, i: int, n: int) -> str:
     return (f"**Stop {i}/{n}: {stop['tag']}** · {stop['asset_class']} · {stop['condition_state']} · "
             f"health **{stop['health_score']}** · {stop['issue_code']}"
             + ("  \n_Faulty target: copilot diagnosis below._" if stop["kind"] == "target" else ""))
+
+
+def audio_seconds(audio: bytes, cfg: Cfg) -> float:
+    """Length of a constant-bitrate ElevenLabs mp3, from voice.output_format (e.g. mp3_44100_128 = 128 kbit/s)."""
+    try:
+        kbps = int(str(cfg["viewer"]["voice"]["output_format"]).rsplit("_", 1)[-1])
+    except (KeyError, ValueError):
+        kbps = 128
+    return len(audio) * 8 / (kbps * 1000)
 
 
 def status_of(node: dict) -> str:
@@ -200,6 +257,8 @@ class Sim:
         self.next_stop = 0
         self.pause_until = self.pause_left = 0.0
         self.face_target: np.ndarray | None = None   # avatar faces this point while stopped
+        self._saved_cams: dict[int, tuple] = {}      # each browser's own camera, restored when POV is turned off
+        self._pov_look: np.ndarray | None = None     # smoothed POV look-at point
         self.stop_active: dict | None = None         # tour stop currently highlighted
         self.walk_mode = "tour"                      # "tour" (ends at faulty target) | "goto" (one equipment)
         self.tour_route = (self.pts.copy(), list(self.stops))
@@ -222,12 +281,33 @@ class Sim:
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.selected: dict | None = None
-        self.server = viser.ViserServer(port=self.vc["port"])
+        self.node_by_id = {n["id"]: n for n in self.nodes}
+        self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
+        self.inst: dict[str, dict] = {}              # shown instances (originals + copies) by name
+        self.sel_inst: str | None = None
+        self._picked_inst: str | None = None
+        self.show_movable = False
+        self.gizmo: Any = None
+        from api.annotate import free_port
+        self.port = free_port(self.vc["port"])          # another viewer may already hold the configured port
+        if self.port != self.vc["port"]:
+            print(f"[viewer] port {self.vc['port']} is in use; using {self.port}")
+        self.server = viser.ViserServer(port=self.port)
         self.server.scene.set_up_direction(self.cfg["scene"]["up_direction"])
         self._labels: list[Any] = []
         self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
+        self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
+        self.h_corr_acc: list[Any] = []
+        self.annot: Any = None
+        try:
+            from api.annotate import start_in_thread
+            self.annot = start_in_thread(cfg, sink=self)
+            self.annot.push_accepted()
+            self.md_correct.content = self.correct_link(self.dd_region.value)
+        except Exception as e:  # noqa: BLE001  (viewer still works without the tool)
+            print(f"[viewer] boundary correction tool unavailable: {e}")
         self.server.scene.on_click()(self.on_scene_click)
 
     # --- splat display groups (ceiling / walls / room) ---
@@ -253,6 +333,23 @@ class Sim:
         self.sp_inside = inside
         self.sp_group = np.where(h > dc["ceiling_cut_h"], "ceiling", np.where(near_wall, "walls", "room"))
         self.h_splat: dict[str, Any] = {}
+        self.sp_movable = np.zeros(len(x), bool)
+        if self.vc["render_splats"]:
+            idx = {n["id"]: i for i, n in enumerate(self.sg["objects"])}
+            for oid, r in self.movable_rows(d["row_ids"]).items():
+                self.sp_movable[r] = True
+                n = self.node_by_id[oid]
+                c = np.array(n["center"])
+                self.movable[oid] = {"c": c, "xyz": x[r] - c, "rgb": d["rgb"][r], "op": self.sp["opacity"][r],
+                                     "cov": self.sp["cov"][r], "pick": self.pick_xyz[self.pick_lab == idx[oid]] - c,
+                                     "box": box_edges(np.array(n["bbox_min"]) - c, np.array(n["bbox_max"]) - c)}
+
+    def movable_rows(self, row_ids: np.ndarray) -> dict[str, np.ndarray]:
+        p = out_path(self.cfg, "removable_rows.npz")
+        if not p.exists():
+            return {}
+        z = np.load(p)
+        return {oid: np.searchsorted(row_ids, z[oid]) for oid in z.files if oid in self.node_by_id}
 
     def rebuild_splats(self, dark_threshold: float, crop: bool) -> dict[str, int]:
         """(Re)send the three splat groups with the brightness / crop filter; keep their visibility."""
@@ -262,7 +359,7 @@ class Sim:
             keep &= self.sp_inside
         counts = {}
         for g in ("room", "walls", "ceiling"):
-            m = keep & (self.sp_group == g)
+            m = keep & (self.sp_group == g) & ~self.sp_movable
             vis = self.h_splat[g].visible if g in self.h_splat else self.vc["display"].get(f"show_{g}", True)
             if self.vc["render_splats"]:
                 h = sc.add_gaussian_splats(f"/splat/{g}", centers=self.sp["xyz"][m], rgbs=self.sp["rgb"][m],
@@ -280,7 +377,7 @@ class Sim:
         sc = self.server.scene
         self._load_splat_groups()
         self.rebuild_splats(self.vc["display"]["dark_threshold"], self.vc["display"]["crop_outside_walls"])
-        segs, cols = edges_for(self.nodes, self.vc["colors"])
+        segs, cols = edges_for([n for n in self.nodes if n["id"] not in self.movable], self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
         # before/after: baseline boxes (orange) and repaired objects (magenta = context, cyan = geometry)
@@ -298,17 +395,9 @@ class Sim:
         self.h_rep = sc.add_line_segments("/repaired_boxes", np.concatenate(segs_r) if segs_r else np.zeros((0, 2, 3), np.float32),
                                           np.concatenate(cols_r) if cols_r else np.zeros((0, 2, 3), np.uint8),
                                           thickness=3.0, thickness_units="screen", visible=False)
-        lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
-        p = self.pts + lift
         self.draw_path()
         self.h_tour_markers: list[Any] = []
-        for k, st in enumerate(self.stops, 1):              # numbered tour stop markers on the floor
-            q = p[min(st["sample_index"], len(p) - 1)]
-            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
-            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
-            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
-                                                    position=(q[0], q[1] - 0.12, q[2]),
-                                                    anchor="bottom-center", font_screen_scale=0.8))
+        self.draw_tour_markers()
         t = self.target
         sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
@@ -326,13 +415,18 @@ class Sim:
         self.is_equipment = [bool(n["asset"]) or n["label"] not in self.vc["near_label_skip"]
                              for n in self.nodes]
         mode = self.vc["label_mode"]
-        self.h_all_labels = [sc.add_label(f"/all_labels/{n['id']}", label_text(n),
-                                          position=(n["center"][0], n["bbox_min"][1], n["center"][2]),
+        for oid in self.movable:
+            self.add_instance(oid, oid)
+        self.h_all_labels = [sc.add_label(f"/movable/{n['id']}/label" if n["id"] in self.movable else
+                                          f"/all_labels/{n['id']}", label_text(n),
+                                          position=((0.0, n["bbox_min"][1] - n["center"][1], 0.0) if n["id"] in self.movable
+                                                    else (n["center"][0], n["bbox_min"][1], n["center"][2])),
                                           anchor="bottom-center",
                                           font_screen_scale=(self.vc["equipment_label_scale"] if eq
                                                              else self.vc["all_label_scale"]),
                                           visible=label_visible(mode, eq))
                              for n, eq in zip(self.nodes, self.is_equipment)]
+        self.load_edits()
         self._build_avatar()
         sc.add_icosphere("/avatar/ring", radius=1.0, color=tuple(self.vc["avatar"]["ring_color"]),
                          opacity=0.15,
@@ -344,6 +438,10 @@ class Sim:
         sc, av = self.server.scene, self.av
         self.h_avatar = sc.add_frame("/avatar", show_axes=False)
         self.h_body = sc.add_frame("/avatar/body", show_axes=False)       # bobs while walking
+        self.h_limbs: dict[str, Any] = {}
+        self.rig = self._load_rigged_avatar()
+        if self.rig is not None:                                          # Mixamo worker replaces the boxes
+            return
         col = {k: tuple(v) for k, v in av["colors"].items()}
         sc.add_box("/avatar/body/torso", col["vest"], tuple(av["torso"]),
                    position=(0, -av["torso_h"], 0))
@@ -353,7 +451,6 @@ class Sim:
                          position=(0, -av["head_h"], 0))
         sc.add_icosphere("/avatar/body/helmet", radius=av["head_r"] * 1.15, color=col["helmet"],
                          position=(0, -(av["head_h"] + av["head_r"] * 0.35), 0), scale=(1, 0.6, 1))
-        self.h_limbs: dict[str, Any] = {}
         for side, sx in (("l", 1), ("r", -1)):
             hip = sc.add_frame(f"/avatar/body/hip_{side}", show_axes=False,
                                position=(sx * av["hip_dx"], -av["hip_h"], 0))
@@ -369,6 +466,25 @@ class Sim:
                              color=col["skin"], position=(0, av["arm"][1] + 0.02, 0))
             self.h_limbs[f"hip_{side}"], self.h_limbs[f"shoulder_{side}"] = hip, sh
 
+    def _load_rigged_avatar(self) -> Any:
+        """Mixamo character from data/avatar/*.glb (see README); None -> the box figure is used."""
+        rc = self.av.get("rigged", {})
+        if not rc.get("enabled", True) or not repo_path(rc.get("walk_glb", "")).exists():
+            if rc.get("enabled", True):
+                print(f"[viewer] no {rc.get('walk_glb')} (see README 'Worker avatar'); using the box figure")
+            return None
+        try:
+            from viewer.avatar import RiggedAvatar
+            rc = {**rc, "walk_glb": repo_path(rc["walk_glb"]),
+                  "idle_glb": repo_path(rc["idle_glb"]) if rc.get("idle_glb") else None}
+            up_sign = -1.0 if self.cfg["scene"]["up_direction"].startswith("-") else 1.0
+            rig = RiggedAvatar(self.server, "/avatar/body", rc, self.cfg["scene"]["units_to_m"], up_sign)
+            print(f"[viewer] rigged worker avatar: {len(rig.meshes)} parts, {rc['height_m']} m")
+            return rig
+        except Exception as e:  # noqa: BLE001 - a broken model file must not stop the viewer
+            print(f"[viewer] rigged avatar failed ({type(e).__name__}: {e}); using the box figure")
+            return None
+
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
         if self.face_target is not None:                                # at a tour stop: face the equipment
@@ -378,6 +494,7 @@ class Sim:
         else:
             tangent = self.tangent()
         yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> facing direction
+        self._facing = np.array([np.sin(yaw), 0.0, np.cos(yaw)])         # used by the worker POV camera
         self.h_avatar.position = tuple(p)
         self.h_avatar.wxyz = (np.cos(yaw / 2), 0.0, np.sin(yaw / 2), 0.0)
         phase = 2 * np.pi * self.dist / av["stride"]
@@ -388,6 +505,8 @@ class Sim:
         def rot_x(a: float) -> tuple[float, float, float, float]:
             return (float(np.cos(a / 2)), float(np.sin(a / 2)), 0.0, 0.0)
 
+        if self.rig is not None:                # the rig's own walk/idle animation (run loop) moves the limbs
+            return
         self.h_body.position = (0.0, bob, 0.0)
         self.h_limbs["hip_l"].wxyz, self.h_limbs["hip_r"].wxyz = rot_x(swing), rot_x(-swing)
         self.h_limbs["shoulder_l"].wxyz, self.h_limbs["shoulder_r"].wxyz = rot_x(arm), rot_x(-arm)
@@ -399,18 +518,355 @@ class Sim:
 
     # --- gui ---
     def _build_gui(self) -> None:
+        """Tabs: Equipment (pick → data, spoken summary, ask the copilot), Walk (to equipment, to a clicked
+        object, inspection tour), Ask the MCP (chat), More (view settings, inspector, boundary-repair review)."""
         g = self.server.gui
+        g.configure_theme(control_width="large")         # room for the asset card's tables
+        g.add_html(TABLE_CSS)                             # grid lines for every markdown table in the panel
+        g.add_markdown("## Valmet Field Copilot")
+        # Viser has no API to change the active tab; updating this (invisible) snippet makes every open
+        # browser click the named tab. Outside the tab group, so it is always mounted.
+        self.h_tabjs = g.add_html("")
+        self._tab_seq = 0
+        self._equipment_options()                          # shared by the Walk and Info pickers
+        tabs = g.add_tab_group()
+        with tabs.add_tab("Walk", icon="walk"):
+            self._build_walk_tab(g)
+        with tabs.add_tab("Info", icon="info-circle"):
+            self._build_equipment_tab(g)
+        with tabs.add_tab("Ask the MCP", icon="messages"):
+            self._build_chat_gui(g)
+        if self.movable:
+            with tabs.add_tab("Edit scene", icon="arrows-move"):
+                self._build_edit_tab(g)
+        with tabs.add_tab("More", icon="settings"):
+            self._build_more_tab(g)
+
+    # Info tab (equipment information): the main flow
+    def _equipment_options(self) -> None:
+        order = {"attention_required": 0, "degraded": 1, "watch": 2, "healthy": 3}
+        assets = sorted((n for n in self.nodes if n["asset"]),
+                        key=lambda n: (order.get(status_of(n), 9), n["asset"]["tag"]))
+        self.equip_opt: dict[str, str] = {}                 # tag -> dropdown text
+        self.equip_node: dict[str, dict] = {}               # dropdown text -> node
+        for n in assets:
+            a = n["asset"]
+            opt = f"{STATUS_DOT.get(a['condition_state'], '⚪')} {a['tag']} · {a['asset_class'].replace('_', ' ').lower()}"
+            self.equip_opt[a["tag"]], self.equip_node[opt] = opt, n
+
+    def selected_equipment(self) -> dict:
+        return self.equip_node[self.dd_equip.value]
+
+    def _build_equipment_tab(self, g: Any) -> None:
+        self.dd_equip = g.add_dropdown("Equipment", list(self.equip_node),
+                                       initial_value=self.equip_opt[self.target["asset"]["tag"]],
+                                       hint="Sorted by condition: most urgent first. Picking one shows its "
+                                            "information and walks the worker there.")
+        self.b_ask = g.add_button("Ask what you want to know", color="green", icon="message-chatbot",
+                                  hint="Ask the copilot anything about this equipment (1 live AI request).")
+        self.md_loading = g.add_markdown("", visible=False)
+        self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
+        self.h_audio = g.add_html("", visible=False)          # spoken briefing player
+        self.md_copilot = g.add_markdown("")
+        self.img_obj = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)   # scan crop (no-record objects)
+        icons = dict(zip(DETAIL_SECTIONS, ("📇", "📈", "🔔", "🔧", "🗂️", "📄", "⚠️", "📍")))
+        self.md_details: dict[str, Any] = {}
+        self.detail_folders: list[Any] = []
+        for name in DETAIL_SECTIONS:                              # full data, one collapsible table each
+            with g.add_folder(f"{icons[name]} {name}", expand_by_default=False) as fo:
+                self.md_details[name] = g.add_markdown("")
+            self.detail_folders.append(fo)
+        self._load_token = 0
+        self.load_equipment()
+
+        @self.dd_equip.on_update
+        def _(e: Any) -> None:
+            self.load_equipment()
+            if e.client is not None:                    # picked by a person (tour/walk/click selections have no
+                self.go_to(self.selected_equipment())   # client): the worker walks there as well
+
+        @self.b_ask.on_click
+        def _(e: Any) -> None:
+            self.open_question_dialog(e.client)
+
+    @staticmethod
+    def _tip(g: Any, text: str, label: str = "What does this do?") -> Any:
+        """Hover-to-explain line (styles in TABLE_CSS)."""
+        import html as _html
+        return g.add_html(f'<div class="vtip">ⓘ {_html.escape(label)}'
+                          f'<div class="vtip-box">{_html.escape(text)}</div></div>')
+
+    def _build_walk_tab(self, g: Any) -> None:
+        """Three ways to move the worker; every control explains itself in a hover tooltip."""
+        g.add_markdown("**There are three options to move the worker. Choose one of them.**  \n"
+                       "Hover **ⓘ** for a short explanation.")
+        self.cb_walk_pov = g.add_checkbox("Use POV", False,
+                                          hint="See the walk through the worker's eyes. Switch off to get your own "
+                                               "camera back.")
+        self.md_walk = g.add_markdown("")                           # walking to / arrived at (all modes)
+        with g.add_folder("① Select equipment"):
+            self._tip(g, "Pick any equipment from the dropdown and press 'Walk to equipment'")
+            self.dd_walk = g.add_dropdown(
+                "Equipment", list(self.equip_node), initial_value=self.equip_opt[self.target["asset"]["tag"]],
+                hint="Every equipment from the Excel pack, most urgent first.")
+            b_walk = g.add_button(
+                "Walk to equipment", color="blue", icon="walk",
+                hint="The worker walks from where it stands to the chosen equipment on a collision-free path, "
+                     "turns to face it and its data opens in the Info tab.")
+        with g.add_folder("② Click an object"):
+            self._tip(g, "Click anything in the 3D scene (pump, valve, ladder, cabinet, ...), then press "
+                         "'Walk to clicked object'")
+            self.md_clicked = g.add_markdown("_Nothing selected: click any object in the 3D view._")
+            b_walk_click = g.add_button(
+                "Walk to clicked object", color="blue", icon="hand-click",
+                hint="Click anything in the 3D scene (pump, valve, ladder, cabinet, ...) and press this: the "
+                     "worker walks to it. Works for objects without an Excel record too.")
+        with g.add_folder("③ Inspection tour"):
+            self._tip(g, "A full inspection round: from the door past every equipment with a warning, pausing at "
+                         "each to show its status, ending at the faulty pump where the copilot gives a spoken "
+                         "briefing. Play / Pause starts or pauses it, Reset goes back to the door.")
+            self._build_tour_tab(g)
+
+        @self.dd_walk.on_update
+        def _(_e: Any) -> None:
+            self.mark_selected(self.equip_node[self.dd_walk.value])
+
+        @b_walk.on_click
+        def _(_e: Any) -> None:
+            self.go_to(self.equip_node[self.dd_walk.value])
+            if self.playing:                                    # walk started: its information meanwhile
+                self.show_tab("Info")
+
+        @b_walk_click.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                self.md_walk.content = "⚠️ Click an object in the 3D view first, then press **Walk to clicked object**."
+                return
+            self.go_to(self.selected)
+            if self.playing:
+                if not self.selected.get("asset"):
+                    self.show_object(self.selected)                # no Excel record: its 3D information
+                self.show_tab("Info")
+
+    def choose_equipment(self, tag: str) -> None:
+        """Select equipment in the Info tab (from a click, a walk or the tour) and load its data."""
+        opt = self.equip_opt.get(tag)
+        if opt and getattr(self, "dd_walk", None) is not None and self.dd_walk.value != opt:
+            self.dd_walk.value = opt                               # keep the Walk tab's picker in sync
+        if opt and self.dd_equip.value != opt:
+            self.dd_equip.value = opt
+            self.load_equipment()
+
+    @staticmethod
+    def summary_opener(tag: str) -> str:
+        return f"Copilot summary for {tag}."
+
+    def load_equipment(self, speak: bool = True, on_spoken: Any = None) -> None:
+        """Show the selected equipment's status + copilot diagnosis automatically, without spending credits:
+        the saved AI answer when one exists for the same evidence, else the template from the Excel evidence.
+        Then the copilot reads its summary aloud (ElevenLabs; cached per text, so repeats are free)."""
+        n = self.selected_equipment()
+        tag = n["asset"]["tag"]
+        if self.arrived and n is self.target:                 # the tour's spoken briefing owns the panel
+            self.mark_selected(n)
+            self.fill_details(n)
+            self.show_diagnosis()
+            return
+        self._load_token += 1
+        token = self._load_token
+        self.md_copilot.content = f"_Loading {tag}…_"
+        self.set_audio(None)                                   # stop the previous equipment's summary
+        self.set_object_view(False)
+        self.mark_selected(n)
+        self.fill_details(n)
+
+        def current() -> bool:
+            return token == self._load_token and not (self.arrived and self.selected_equipment() is self.target)
+
+        def work() -> None:
+            d = None
+            try:
+                d = diagnose(tag, None, self.cfg, allow_paid=False)
+                text = self.equipment_view(tag, d)
+            except Exception as e:  # noqa: BLE001 - keep the panel usable
+                text = f"⚠️ _Could not load {tag}: {type(e).__name__}: {e}_"
+            if not current():
+                return
+            self.md_copilot.content = text
+            audio = None
+            if speak and d is not None:
+                _, audio = briefing(d, tag, self.cfg, opener=self.summary_opener(tag))
+                if current():
+                    self.set_audio(audio, f"🔊 Copilot summary · {tag}")
+            if on_spoken is not None and current():
+                on_spoken(audio)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_tab(self, label: str) -> None:
+        """Switch every open browser to the tab with this label (see h_tabjs)."""
+        self._tab_seq += 1
+        # Mantine tabs ignore a bare .click(); they need the full pointer/mouse sequence a real click produces.
+        js = ("for(const t of document.querySelectorAll('[role=tab]')){if(t.innerText.trim()==='%s'){"
+              "for(const y of ['pointerdown','mousedown','pointerup','mouseup','click']){"
+              "t.dispatchEvent(new (y.startsWith('pointer')?PointerEvent:MouseEvent)(y,{bubbles:true,"
+              "cancelable:true,button:0,pointerType:'mouse',isPrimary:true}));}break;}}" % label)
+        self.h_tabjs.content = (f'<img alt="" style="display:none" data-seq="{self._tab_seq}" '
+                                f'src="data:image/gif;base64,invalid{self._tab_seq}" onerror="{js}">')
+
+    def set_object_view(self, on: bool) -> None:
+        """Info tab shows a plain scene object (no Excel record): hide the equipment-only sections."""
+        for fo in self.detail_folders:
+            fo.visible = not on
+        self.b_ask.visible = not on                            # the copilot answers about Excel equipment only
+        if not on:
+            self.img_obj.visible = False
+
+    def show_object(self, n: dict) -> None:
+        """All we know about a scene object without an Excel record: label, size, scan points, crop image."""
+        self._load_token += 1                                  # cancels a pending equipment load
+        self.set_audio(None)
+        self.set_object_view(True)
+        self.md_copilot.content = (selection_text(n, self.cfg["scene"]["units_to_m"])
+                                   + "\n\n_Pick an equipment in the dropdown above to see Excel data._")
+        crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
+        if crop.exists():
+            from PIL import Image
+            self.img_obj.image = np.asarray(Image.open(crop).convert("RGB"))
+            self.img_obj.visible = True
+        else:
+            self.img_obj.visible = False
+
+    def fill_details(self, n: dict) -> None:
+        """Full Excel + 3D record of the equipment in the collapsible tables (fast: Excel is cached)."""
+        try:
+            xl = load_pack(str(repo_path(self.cfg["paths"]["xlsx"])))
+            det = asset_details(build_evidence(n["asset"]["tag"], self.cfg), xl, n, self.cfg["scene"]["units_to_m"])
+        except Exception as e:  # noqa: BLE001 - keep the panel usable
+            det = {k: f"⚠️ _Could not load: {type(e).__name__}: {e}_" for k in DETAIL_SECTIONS}
+        for k, md in self.md_details.items():
+            md.content = det.get(k, "")
+
+    def set_audio(self, audio: bytes | None, caption: str = "") -> None:
+        """Show (and autoplay) an mp3 in the Info tab, or remove the player (stops playback)."""
+        if not audio:
+            self.h_audio.visible = False
+            self.h_audio.content = ""
+            return
+        b64 = base64.b64encode(audio).decode()
+        self.h_audio.content = (f'<div style="font-weight:600;margin:4px 0">{caption}</div>'
+                                f'<audio controls autoplay style="width:100%" '
+                                f'src="data:audio/mpeg;base64,{b64}"></audio>')
+        self.h_audio.visible = True
+
+    def equipment_view(self, tag: str, d: dict) -> str:
+        """Asset card from the Excel evidence; a saved AI answer (if any) goes on top of it."""
+        card = asset_card(build_evidence(tag, self.cfg), compact=True)
+        if d.get("meta", {}).get("source", "").startswith("template_fallback"):
+            return card
+        return self.answer_header(d) + to_markdown(d) + "\n\n---\n\n" + card
+
+    @staticmethod
+    def answer_header(d: dict) -> str:
+        src = d.get("meta", {}).get("source", "")
+        if src.startswith("template_fallback"):
+            return "📋 _Built from the Excel evidence (no AI call). **Ask what you want to know** for an AI answer._\n\n"
+        return f"🤖 _AI answer · {src}_\n\n"
+
+    def open_question_dialog(self, client: Any) -> None:
+        """Small dialog: question about the selected equipment -> live copilot answer (1 paid request)."""
+        if self._busy:
+            return
+        tag = self.selected_equipment()["asset"]["tag"]
+        with client.gui.add_modal(f"Ask the copilot about {tag}") as modal:
+            client.gui.add_markdown("Uses one live Featherless request (repo budget: "
+                                    f"{self.cfg['copilot']['budget']['max_paid_requests']} in total). "
+                                    "The same question about the same data is answered from the saved copy.")
+            tx = client.gui.add_text("Question", "What should I check first, and why?")
+            b_go = client.gui.add_button("Ask", color="green", icon="send")
+            b_cancel = client.gui.add_button("Cancel")
+
+            @b_go.on_click
+            def _(_e: Any) -> None:
+                q = tx.value.strip()
+                modal.close()
+                if q:
+                    self.run_job(tag, q, lambda d: setattr(self.md_copilot, "content",
+                                                           self.answer_header(d) + to_markdown(d)))
+
+            @b_cancel.on_click
+            def _(_e: Any) -> None:
+                modal.close()
+
+    # Inspection tour tab
+    def _build_tour_tab(self, g: Any) -> None:
+        if self.tour:
+            g.add_markdown("Walks past all the warning assets")
+        b_play = g.add_button(
+            "Play / Pause", color="blue", icon="player-play",
+            hint="Start the inspection round: from the door past every equipment with a warning (pausing at each), "
+                 "ending at the faulty pump with a spoken copilot briefing. Press again to pause.")
+        b_reset = g.add_button("Reset", icon="refresh", hint="Back to the door, tour from the start.")
+        self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0,
+                                   hint="Drag to move the worker along the route (pauses are skipped).")
+        self.md_stop = g.add_markdown("_Press Play to start the tour._" if self.tour
+                                      else "_No tour: run `python -m pipeline.tour`._")
+
+        @b_play.on_click
+        def _(_e: Any) -> None:
+            if self.walk_mode != "tour":
+                self.set_walk_mode("tour")
+            if self.dist >= self.s[-1]:
+                self.dist, self.next_stop = 0.0, 0
+                self.clear_stop_highlight()
+            self.playing = not self.playing
+            now = time.time()
+            if self.playing:                    # resume the stop pause where it was frozen
+                self.pause_until = now + self.pause_left if self.stop_active is not None else 0.0
+                self.prefetch_diagnosis()
+                self.prefetch_stop_briefings()
+            else:
+                self.pause_left = max(0.0, self.pause_until - now)
+                self.blink_stop(0.0)            # freeze the stop highlight in its visible state
+
+        @b_reset.on_click
+        def _(_e: Any) -> None:
+            if self.walk_mode != "tour":
+                self.set_walk_mode("tour")
+            self.playing, self.dist = False, 0.0
+            self.leave_target()
+            self.next_stop, self.pause_until = 0, 0.0
+            self.clear_stop_highlight()
+            if self.tour:
+                self.md_stop.content = "_Press Play to start the tour._"
+            self.update()
+
+        @self.sl_pos.on_update
+        def _(_e: Any) -> None:
+            if not self.playing:
+                self.dist = float(self.sl_pos.value)
+                self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
+                self.pause_until = self.pause_left = 0.0
+                self.clear_stop_highlight()
+                self.update()
+
+    # More tab: view settings, clicked-object inspector, boundary-repair review
+    def _build_more_tab(self, g: Any) -> None:
         c = self.sg["counts"]
-        g.add_markdown(f"## Valmet Field Copilot\n**{c['objects']} assets extracted** · "
-                       f"{c['structures']} structural planes · **{c['mapped']} mapped** to Excel\n\n"
-                       f"Target: **{self.sg['target']['tag']}** · path {self.sg['path']['length']:.2f} u")
-        b_play = g.add_button("Play / Pause", icon=None)
-        b_reset = g.add_button("Reset")
-        self.sl_speed = g.add_slider("Speed (u/s)", 0.1, 2.0, 0.1, self.vc["walk_speed"])
-        self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
-        self.sl_pos = g.add_slider("Position", 0.0, float(self.s[-1]), 0.01, 0.0)
-        self._build_walk_mode_gui(g)
-        self.cb_boxes = g.add_checkbox("Show all frames", True)
+        g.add_markdown(f"**{c['objects']} objects** extracted · {c['structures']} structural planes · "
+                       f"**{c['mapped']} mapped** to Excel")
+        with g.add_folder("View"):
+            self.cb_pov = g.add_checkbox("Worker view (POV)", False,
+                                         hint="See the room through the worker's eyes; turns with the worker. "
+                                              "Switch off to get your own camera back.")
+            self.sl_size = g.add_slider("Worker size", 0.5, 1.2, 0.05,
+                                        self.rig.size if self.rig is not None else 1.0,
+                                        visible=self.rig is not None,
+                                        hint="Scales the worker to fit the room (the scan's metre scale is an "
+                                             "estimate). Set the default in viewer.avatar.rigged.size.")
+            self.sl_speed = g.add_slider("Walk speed (u/s)", 0.1, 2.0, 0.1, self.vc["walk_speed"])
+            self.sl_radius = g.add_slider("Proximity radius", 0.5, 3.0, 0.1, self.vc["proximity_radius"])
+            self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
+            self.cb_boxes = g.add_checkbox("Show all frames", True)
         dc = self.vc["display"]
         with g.add_folder("Scene display", expand_by_default=False):
             cb_ceiling = g.add_checkbox("Show ceiling", dc["show_ceiling"])
@@ -419,6 +875,65 @@ class Sim:
             sl_dark = g.add_slider("Hide dark splats below", 0.0, 0.2, 0.01, dc["dark_threshold"])
             b_apply = g.add_button("Apply filter")
             md_disp = g.add_markdown("")
+        with g.add_folder("Clicked object", expand_by_default=False):
+            self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
+            self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
+            self.md_identify = g.add_markdown("")
+        with g.add_folder("Boundary repair: before / after", expand_by_default=False):
+            g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
+                           f"(magenta) · **{self.n_geo}** geometry pipe joins (cyan)  \nBefore: **{self.n_baseline}** "
+                           f"baseline objects (orange). Fewer boxes is not the goal; check whole components.")
+            self.cb_base = g.add_checkbox("Show baseline boxes (before)", False)
+            self.cb_rep = g.add_checkbox("Highlight repaired objects", True)
+            self.h_rep.visible = True
+            reg = self.review_regions()
+            self.dd_region = g.add_dropdown("Review region", ["-"] + list(reg), initial_value="-")
+            self.md_region = g.add_markdown("_Pick a region: the camera flies to its calibrated view; the image shows "
+                                            "baseline | geometry-only | geometry+context (white = reviewed reference)._")
+            self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.md_render = g.add_markdown("", visible=False)
+            self.img_render = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.md_correct = g.add_markdown(self.correct_link("-"))
+            self.cb_corr = g.add_checkbox("Show correction preview", True)
+            g.add_markdown("<small>Preview: green = selected (2+ views), orange = one view only, red = disputed "
+                           "(excluded), yellow = unseen, left uncertain, blue = unseen, inferred with whole objects. "
+                           "Magenta frames = accepted, cyan = applied.</small>")
+
+        @self.cb_pov.on_update
+        def _(_e: Any) -> None:
+            self.cb_walk_pov.value = self.cb_pov.value
+            self.set_pov(self.cb_pov.value)
+
+        @self.cb_walk_pov.on_update
+        def _(_e: Any) -> None:
+            self.cb_pov.value = self.cb_walk_pov.value              # runs set_pov via the handler above
+
+        @self.sl_size.on_update
+        def _(_e: Any) -> None:
+            if self.rig is not None:
+                self.rig.set_size(float(self.sl_size.value))
+
+        @self.dd_labels.on_update
+        def _(_e: Any) -> None:
+            mode = self.dd_labels.value
+            for h, eq in zip(self.h_all_labels, self.is_equipment):
+                h.visible = label_visible(mode, eq)
+            self.update()
+
+        @self.cb_boxes.on_update
+        def _(_e: Any) -> None:
+            self.h_boxes.visible = self.cb_boxes.value
+            for it in self.inst.values():
+                it["box"].visible = self.cb_boxes.value
+
+        @self.sl_radius.on_update
+        def _(_e: Any) -> None:
+            r = float(self.sl_radius.value)
+            self.server.scene.add_icosphere("/avatar/ring", radius=1.0,
+                                            color=tuple(self.vc["avatar"]["ring_color"]),
+                                            opacity=0.15, scale=(r, 0.01, r))
+            self.update()
 
         @cb_ceiling.on_update
         def _(_e: Any) -> None:
@@ -434,21 +949,23 @@ class Sim:
             c = self.rebuild_splats(float(sl_dark.value), bool(cb_crop.value))
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
-        self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
-        with g.add_folder("Boundary repair: before / after"):
-            g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
-                           f"(magenta) · **{self.n_geo}** geometry pipe joins (cyan)  \nBefore: **{self.n_baseline}** "
-                           f"baseline objects (orange). Fewer boxes is not the goal; check whole components.")
-            self.cb_base = g.add_checkbox("Show baseline boxes (before)", False)
-            self.cb_rep = g.add_checkbox("Highlight repaired objects", True)
-            self.h_rep.visible = True
-            reg = self.review_regions()
-            self.dd_region = g.add_dropdown("Review region", ["-"] + list(reg), initial_value="-")
-            self.md_region = g.add_markdown("_Pick a region: the camera flies to its calibrated view; the image shows "
-                                            "baseline | geometry-only | geometry+context (white = reviewed reference)._")
-            self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            self.md_render = g.add_markdown("", visible=False)
-            self.img_render = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+
+        @self.b_identify.on_click
+        def _(_e: Any) -> None:
+            if self.selected is None:
+                return
+            n = self.selected
+            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
+
+            def work() -> None:
+                from pipeline.label import identify_object
+                self.md_identify.content = identify_object(n, self.cfg)
+            threading.Thread(target=work, daemon=True).start()
+
+        @self.cb_corr.on_update
+        def _(_e: Any) -> None:
+            for h in self.h_corr + self.h_corr_acc:
+                h.visible = self.cb_corr.value
 
         @self.cb_base.on_update
         def _(_e: Any) -> None:
@@ -469,6 +986,7 @@ class Sim:
                 cl.camera.position = tuple(v["eye"])
                 cl.camera.look_at = tuple(v["target"])
             refs = ", ".join(f"{x['id']} {x['cls']}" for x in r["refs"]) or "none (qualitative)"
+            self.md_correct.content = self.correct_link(rid)
             self.md_region.content = f"**{rid}** {r['name']}  \nReferences: {refs}"
             img = ROOT / "out_review" / "compare" / f"{rid}_v0.png"
             if img.exists():
@@ -486,107 +1004,56 @@ class Sim:
                                           "rows = clean RGB | depth | visibility | fragment overlay")
                 self.img_render.image = np.asarray(im)
                 self.md_render.visible = self.img_render.visible = True
-        with g.add_folder("Selected object (click in the scene)"):
-            self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
-            self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            b_fly = g.add_button("Fly to object", visible=True)
-            self.b_identify = g.add_button("Ask vision model what this is (paid)")
-            self.md_identify = g.add_markdown("")
-        with g.add_folder("Inspection tour"):
-            if self.tour:
-                route = " → ".join(["door"] + [s["tag"] for s in self.stops])
-                mode = "from Excel status" if self.tour["mode"] == "auto_excel" else "manual list"
-                skipped = ", ".join(f"{s['tag']}" for s in self.tour["skipped"]) or "none"
-                g.add_markdown(f"Tour {mode}: {route}  \n{self.tour['length']:.1f} u "
-                               f"(~{self.tour['length'] * self.cfg['scene']['units_to_m']:.0f} m) · "
-                               f"skipped (unreachable/limit): {skipped}")
-            self.md_stop = g.add_markdown("_Press Play to start the tour._" if self.tour
-                                          else "_No tour: run `python -m pipeline.tour`._")
-        with g.add_folder("Nearby assets"):
-            self.md_near = g.add_markdown("")
 
-        @self.dd_labels.on_update
-        def _(_e: Any) -> None:
-            mode = self.dd_labels.value
-            for h, eq in zip(self.h_all_labels, self.is_equipment):
-                h.visible = label_visible(mode, eq)
-            self.update()
+    def correct_link(self, rid: str) -> str:
+        if getattr(self, "annot", None) is None:
+            return "_Boundary correction tool not running yet._"
+        port = self.annot.port
+        q = f"?region={rid}" if rid != "-" else ""
+        return (f"**Correct boundaries:** [open the correction tool](http://localhost:{port}/{q}) "
+                f"(draw a box, include/exclude, SAM mask, second view, accept/undo; manual prompts only).")
 
-        @b_fly.on_click
-        def _(e: Any) -> None:
-            if self.selected is not None:
-                self.fly_to(self.selected, e.client)
+    # --- boundary-correction preview sink (called from the annotation server thread) ---
+    def clear_correction(self) -> None:
+        for h in self.h_corr:
+            h.remove()
+        self.h_corr = []
 
-        @self.b_identify.on_click
-        def _(_e: Any) -> None:
-            if self.selected is None:
-                return
-            n = self.selected
-            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
+    def show_correction(self, cid: str, layers: dict, colors: dict, bbox: Any, cam: Any) -> None:
+        self.clear_correction()
+        sc = self.server.scene
+        vis = self.cb_corr.value
+        for name, P in layers.items():
+            if len(P):
+                self.h_corr.append(sc.add_point_cloud(f"/correction/{name}", np.asarray(P, np.float32),
+                                                      colors[name], point_size=0.014, visible=vis))
+        if bbox:
+            self.h_corr.append(sc.add_line_segments("/correction/box", box_edges(*bbox), (255, 255, 255),
+                                                    thickness=3.0, thickness_units="screen", visible=vis))
+            self.h_corr.append(sc.add_label("/correction/label", f"{cid} (preview)",
+                                            position=((bbox[0][0] + bbox[1][0]) / 2, bbox[0][1] - 0.05,
+                                                      (bbox[0][2] + bbox[1][2]) / 2), anchor="bottom-center"))
+        if cam is not None and bbox:
+            c = (np.array(bbox[0]) + np.array(bbox[1])) / 2
+            for cl in self.server.get_clients().values():
+                cl.camera.position = tuple(cam.C)
+                cl.camera.look_at = tuple(c)
 
-            def work() -> None:
-                from pipeline.label import identify_object
-                self.md_identify.content = identify_object(n, self.cfg)
-            threading.Thread(target=work, daemon=True).start()
-        with g.add_folder("Copilot"):
-            tags = sorted(n["asset"]["tag"] for n in self.nodes if n["asset"])
-            self.dd_asset = g.add_dropdown("Asset", tags, initial_value=self.target["asset"]["tag"])
-            self.tx_question = g.add_text("Question", "Why is this asset flagged and what should I check first?")
-            self.b_ask = g.add_button("Ask copilot", color="blue")
-            self.md_loading = g.add_markdown("", visible=False)
-            self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
-            self.h_audio = g.add_html("", visible=False)          # spoken briefing player
-            self.md_copilot = g.add_markdown(IDLE_TEXT)
-
-        @b_play.on_click
-        def _(_e: Any) -> None:
-            if self.dist >= self.s[-1]:
-                self.dist, self.next_stop = 0.0, 0
-                self.clear_stop_highlight()
-            self.playing = not self.playing
-            now = time.time()
-            if self.playing:                    # resume the stop pause where it was frozen
-                self.pause_until = now + self.pause_left if self.stop_active is not None else 0.0
-                self.prefetch_diagnosis()
-            else:
-                self.pause_left = max(0.0, self.pause_until - now)
-                self.blink_stop(0.0)            # freeze the stop highlight in its visible state
-
-        @self.b_ask.on_click
-        def _(_e: Any) -> None:
-            tag, q = self.dd_asset.value, self.tx_question.value
-            self.run_job(tag, q, lambda d: setattr(self.md_copilot, "content", to_markdown(d)))
-
-        @b_reset.on_click
-        def _(_e: Any) -> None:
-            self.playing, self.dist = False, 0.0
-            self.leave_target()
-            self.next_stop, self.pause_until = 0, 0.0
-            self.clear_stop_highlight()
-            if self.tour:
-                self.md_stop.content = "_Press Play to start the tour._"
-            self.update()
-
-        @self.sl_pos.on_update
-        def _(_e: Any) -> None:
-            if not self.playing:
-                self.dist = float(self.sl_pos.value)
-                self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
-                self.pause_until = self.pause_left = 0.0
-                self.clear_stop_highlight()
-                self.update()
-
-        @self.cb_boxes.on_update
-        def _(_e: Any) -> None:
-            self.h_boxes.visible = self.cb_boxes.value
-
-        @self.sl_radius.on_update
-        def _(_e: Any) -> None:
-            r = float(self.sl_radius.value)
-            self.server.scene.add_icosphere("/avatar/ring", radius=1.0,
-                                            color=tuple(self.vc["avatar"]["ring_color"]),
-                                            opacity=0.15, scale=(r, 0.01, r))
-            self.update()
+    def show_accepted(self, items: list[dict]) -> None:
+        for h in self.h_corr_acc:
+            h.remove()
+        self.h_corr_acc = []
+        sc = self.server.scene
+        for it in items:
+            col = (0, 220, 255) if it["status"] == "applied" else (255, 0, 200)
+            bb = it["bbox"]
+            self.h_corr_acc.append(sc.add_line_segments(f"/corrections/{it['cid']}", box_edges(*bb), col,
+                                                        thickness=2.5, thickness_units="screen"))
+            self.h_corr_acc.append(sc.add_label(f"/corrections/{it['cid']}_label",
+                                                f"{it['cid']} {it['cls']} · {it['status']} · {it['evidence']}",
+                                                position=((bb[0][0] + bb[1][0]) / 2, bb[0][1] - 0.05,
+                                                          (bb[0][2] + bb[1][2]) / 2), anchor="bottom-center",
+                                                font_screen_scale=0.7))
 
     @staticmethod
     def review_regions() -> dict:
@@ -603,7 +1070,8 @@ class Sim:
     def update(self) -> None:
         p = self.position()
         if self.walk_mode == "tour":            # "Go to equipment" never auto-diagnoses (paid budget)
-            at_target = self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
+            at_target = (self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
+                         and not self.warning_stop_due())
             if at_target and not self.arrived:
                 self.arrived = True
                 self.on_arrival()
@@ -626,7 +1094,15 @@ class Sim:
             position=(n["center"][0], n["bbox_min"][1], n["center"][2]), anchor="bottom-center",
             font_screen_scale=1.0 if n["asset"] else self.vc["other_label_scale"])
             for n in show]
-        self.md_near.content = nearby_text(mapped, others, r)
+
+    def warning_stop_due(self) -> bool:
+        """True while a tour warning stop is shown, or (during playback) still due at this spot.
+        The last warning stop can sit at the path end next to the target; the target briefing waits
+        until that stop's pause is over, so the worker isn't briefed on P-002 while facing another asset."""
+        if self.stop_active is not None and self.stop_active["kind"] != "target":
+            return True
+        return self.playing and any(st["kind"] != "target" and self.stop_s[k] >= self.dist - 1e-6
+                                    for k, st in enumerate(self.stops) if k >= self.next_stop)
 
     @staticmethod
     def box_gap(n: dict, p: np.ndarray) -> float:
@@ -646,21 +1122,51 @@ class Sim:
         objs = self.sg["objects"]
         hit = (t > 0) & (perp < tol) & (self.pick_lab >= 0)
         hit &= np.array([objs[i]["kind"] == "object" for i in range(len(objs))])[np.maximum(self.pick_lab, 0)]
-        if not hit.any():
-            return None
-        k = np.where(hit)[0][np.argmin(t[hit])]
-        return objs[int(self.pick_lab[k])]
+        hit &= ~np.isin(self.pick_lab, [i for i, o in enumerate(objs) if o["id"] in self.movable])
+        best = (float(t[hit].min()), objs[int(self.pick_lab[np.where(hit)[0][np.argmin(t[hit])]])], None) \
+            if hit.any() else (np.inf, None, None)
+        for name, it in self.inst.items():                    # movable objects where they are now
+            if it["removed"]:
+                continue
+            R = SO3(np.asarray(it["h"].wxyz)).as_matrix()
+            o, dl = R.T @ (origin - np.asarray(it["h"].position)), R.T @ d
+            v = self.movable[it["oid"]]["pick"] - o
+            t = v @ dl
+            perp = np.linalg.norm(v - np.outer(t, dl), axis=1)
+            ok = (t > 0) & (perp < self.vc["pick_radius"] + self.vc["pick_radius_per_unit"] * np.maximum(t, 0))
+            if ok.any() and float(t[ok].min()) < best[0]:
+                best = (float(t[ok].min()), self.node_by_id[it["oid"]], name)
+        self._picked_inst = best[2]
+        return best[1]
 
     def on_scene_click(self, e: Any) -> None:
         n = self.pick(np.array(e.ray_origin), np.array(e.ray_direction))
         if n is not None:
-            self.select(n)
+            self.select(n, inst=self._picked_inst)
 
-    def select(self, n: dict) -> None:
-        self.selected = n
-        segs, _ = edges_for([n], self.vc["colors"])
+    def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
+        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour.
+        segs: the object's current box edges (a moved instance); default = its box in the scan."""
+        if segs is None:
+            segs, _ = edges_for([n], self.vc["colors"])
+        col = np.array(self.vc["selected_color"], np.uint8)
         self.h_selected.points = segs
-        self.h_selected.colors = np.tile(np.array(self.vc["selected_color"], np.uint8), (len(segs), 2, 1))
+        self.h_selected.colors = np.tile(col, (len(segs), 2, 1))
+        pts = np.asarray(segs).reshape(-1, 3)
+        lo, hi = pts.min(0), pts.max(0)
+        pad = self.vc["stop_fill_pad"]
+        self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
+            "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
+            opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
+
+    def select(self, n: dict, inst: str | None = None) -> None:
+        self.selected = n
+        self.sel_inst = inst if inst is not None or n["id"] not in self.movable else n["id"]
+        self.hide_gizmo()
+        if self.movable:
+            self.md_edit.content = (f"**{self.sel_inst}** selected." if self.sel_inst else
+                                    "_This object can't be edited; pick one of the movable objects._")
+        self.mark_selected(n, self.inst_box(self.sel_inst) if self.sel_inst else None)
         self.md_sel.content = selection_text(n, self.cfg["scene"]["units_to_m"])
         crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
         if crop.exists():
@@ -670,8 +1176,201 @@ class Sim:
         else:
             self.img_sel.visible = False
         self.md_identify.content = ""
-        if n["asset"]:
-            self.dd_asset.value = n["asset"]["tag"]
+        what = f"**{n['asset']['tag']}** ({n['label']})" if n["asset"] else f"**{n['id']}** · {n['label']} (no Excel record)"
+        self.md_clicked.content = f"Selected: {what}"
+        if n["asset"]:                                               # clicked equipment -> Info tab
+            self.choose_equipment(n["asset"]["tag"])
+
+    # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
+    def _build_edit_tab(self, g: Any) -> None:
+        g.add_markdown(f"**{len(self.movable)} objects** cut out cleanly and can be moved, removed or duplicated. "
+                       "Click one in the 3D view or pick it below.")
+        dd = g.add_dropdown("Movable object", ["-", *self.movable], initial_value="-")
+        cb_show = g.add_checkbox("Show movable objects", self.show_movable)
+        self.md_edit = g.add_markdown("_Nothing selected._")
+        b_move = g.add_button("Move", icon="arrows-move")
+        b_dup = g.add_button("Duplicate", icon="copy")
+        b_remove = g.add_button("Remove", icon="trash", color="red")
+        b_restore = g.add_button("Restore object", hint="Put it back where it was and delete its copies")
+        b_restore_all = g.add_button("Restore all")
+
+        @dd.on_update
+        def _(e: Any) -> None:
+            if dd.value != "-":
+                self.select(self.node_by_id[dd.value])
+                self.fly_to(self.node_by_id[dd.value], e.client)
+                dd.value = "-"                                          # the same object can be picked again
+
+        @cb_show.on_update
+        def _(_e: Any) -> None:
+            self.show_movable = cb_show.value
+            for it in self.inst.values():
+                it["show"].visible = self.show_movable
+
+        @b_move.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst and not self.inst[self.sel_inst]["removed"]:
+                self.show_gizmo(self.sel_inst)
+
+        @b_dup.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst:
+                src = self.inst[self.sel_inst]
+                oid = src["oid"]
+                k = 1 + max([int(x.rsplit("_copy", 1)[1]) for x in self.inst if x.startswith(oid + "_copy")] or [0])
+                name = f"{oid}_copy{k}"
+                self.add_instance(name, oid, np.asarray(src["h"].position) + np.array(self.vc["duplicate_offset"]),
+                                  src["h"].wxyz)
+                self.select(self.node_by_id[oid], inst=name)
+                self.show_gizmo(name)
+                self.save_edits()
+
+        @b_remove.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst:
+                if self.sel_inst == self.inst[self.sel_inst]["oid"]:
+                    self.inst[self.sel_inst]["removed"] = True
+                    self.inst[self.sel_inst]["h"].visible = False
+                else:                                                   # a copy is deleted for good
+                    self.inst.pop(self.sel_inst)["h"].remove()
+                self.md_edit.content = f"**{self.sel_inst}** removed."
+                self.sel_inst = None
+                self.hide_gizmo()
+                self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
+                self.save_edits()
+
+        @b_restore.on_click
+        def _(_e: Any) -> None:
+            if self.selected is not None and self.selected["id"] in self.movable:
+                self.restore(self.selected["id"])
+                self.select(self.selected)
+                self.save_edits()
+
+        @b_restore_all.on_click
+        def _(_e: Any) -> None:
+            for oid in self.movable:
+                self.restore(oid)
+            self.hide_gizmo()
+            self.save_edits()
+
+    def add_instance(self, name: str, oid: str, pos: Any = None, wxyz: Any = (1.0, 0.0, 0.0, 0.0)) -> None:
+        """Frame at the object's pose holding its splat, box and label, so they move together."""
+        m, sc = self.movable[oid], self.server.scene
+        h = sc.add_frame(f"/movable/{name}", show_axes=False, position=tuple(m["c"] if pos is None else pos),
+                         wxyz=tuple(wxyz))
+        sc.add_gaussian_splats(f"/movable/{name}/splat", centers=m["xyz"], rgbs=m["rgb"], opacities=m["op"],
+                               covariances=m["cov"])
+        box = sc.add_line_segments(f"/movable/{name}/box", m["box"],
+                                   tuple(self.vc["colors"][status_of(self.node_by_id[oid])]),
+                                   thickness=self.vc["box_thickness"], thickness_units="screen",
+                                   visible=self.cb_boxes.value if hasattr(self, "cb_boxes") else True)
+        show = sc.add_line_segments(f"/movable/{name}/show", m["box"], tuple(self.vc["movable_color"]),
+                                    thickness=self.vc["selected_thickness"], thickness_units="screen",
+                                    visible=self.show_movable)
+        self.inst[name] = {"oid": oid, "h": h, "box": box, "show": show, "removed": False}
+
+    def inst_box(self, name: str) -> np.ndarray:
+        h = self.inst[name]["h"]
+        R = SO3(np.asarray(h.wxyz)).as_matrix()
+        return (self.movable[self.inst[name]["oid"]]["box"] @ R.T + np.asarray(h.position)).astype(np.float32)
+
+    def show_gizmo(self, name: str) -> None:
+        h = self.inst[name]["h"]
+        self.hide_gizmo()
+        self.gizmo = self.server.scene.add_transform_controls(
+            "/gizmo", scale=0.6, position=h.position, wxyz=h.wxyz, depth_test=False,
+            rotation_limits=((0, 0), (-1000, 1000), (0, 0)))               # yaw only (up = -y)
+
+        @self.gizmo.on_update
+        def _(_e: Any) -> None:
+            h.position, h.wxyz = self.gizmo.position, self.gizmo.wxyz
+            self.h_selected.points = self.inst_box(name)
+            self.save_edits()
+
+    def hide_gizmo(self) -> None:
+        if self.gizmo is not None:
+            self.gizmo.remove()
+            self.gizmo = None
+
+    def restore(self, oid: str) -> None:
+        for name in [x for x in self.inst if x.startswith(oid + "_copy")]:
+            self.inst.pop(name)["h"].remove()
+        it = self.inst[oid]
+        it["h"].position, it["h"].wxyz, it["h"].visible = tuple(self.movable[oid]["c"]), (1.0, 0.0, 0.0, 0.0), True
+        it["removed"] = False
+
+    def save_edits(self) -> None:
+        out_path(self.cfg, "viewer_edits.json").write_text(json.dumps(
+            {name: {"oid": it["oid"], "position": [float(x) for x in it["h"].position],
+                    "wxyz": [float(x) for x in it["h"].wxyz], "removed": it["removed"]}
+             for name, it in self.inst.items()}, indent=1), encoding="utf-8")
+
+    def load_edits(self) -> None:
+        p = out_path(self.cfg, "viewer_edits.json")
+        if not p.exists():
+            return
+        for name, e in json.loads(p.read_text(encoding="utf-8")).items():
+            if e["oid"] not in self.movable:
+                continue
+            if name not in self.inst:
+                self.add_instance(name, e["oid"])
+            it = self.inst[name]
+            it["h"].position, it["h"].wxyz = tuple(e["position"]), tuple(e["wxyz"])
+            it["removed"] = e["removed"]
+            it["h"].visible = not e["removed"]
+
+    # --- worker point of view ---
+    def set_pov(self, on: bool) -> None:
+        """Enter/leave the worker's view: hide the body (camera sits in the head), remember and later
+        restore each browser's own camera."""
+        self.h_body.visible = not on
+        clients = self.server.get_clients().values()
+        if on:
+            self._pov_look = None
+            self._saved_cams = {c.client_id: (c.camera.position, c.camera.look_at, c.camera.fov)
+                                for c in clients}
+            self.update_pov()
+            return
+        for c in clients:
+            saved = self._saved_cams.get(c.client_id)
+            if saved:
+                with c.atomic():
+                    c.camera.position, c.camera.look_at, c.camera.fov = saved
+        self._saved_cams = {}
+
+    def update_pov(self) -> None:
+        """Camera at the worker's eyes, looking where the worker walks; at a stop or the target it looks
+        at the equipment. Smoothed so turns at corners and stops are a pan, not a jump."""
+        pc = self.vc["pov"]
+        p = self.position()
+        up = np.array([0.0, -1.0, 0.0])                                 # scene up = -y
+        f = getattr(self, "_facing", self.tangent())
+        eye_h = 0.94 * self.rig.height_units if self.rig is not None else self.av["head_h"]
+        eye = p + up * (eye_h + float(self.h_body.position[1])) + f * pc["eye_forward"]
+        focus = self.face_target if self.face_target is not None else (
+            np.array(self.target["center"]) if self.arrived else None)
+        if focus is not None:
+            # turn to the equipment, but tilt the head only as far as a person would: low or overhead
+            # equipment (box centre near the floor / ceiling) is looked at straight ahead, slightly down/up
+            to = np.asarray(focus, np.float64) - eye
+            horiz = to - up * float(to @ up)
+            dist = float(np.linalg.norm(horiz))
+            hdir = horiz / dist if dist > 1e-6 else f
+            pitch = np.arctan2(float(to @ up), max(dist, 1e-6))          # + = up, - = down
+            pitch = float(np.clip(pitch, -np.radians(pc["max_look_down_deg"]), np.radians(pc["max_look_up_deg"])))
+            look = eye + pc["look_ahead"] * (hdir + up * np.tan(pitch))
+        else:
+            look = eye + f * pc["look_ahead"] - up * pc["look_down"]
+        prev = getattr(self, "_pov_look", None)
+        look = look if prev is None else prev + pc["smoothing"] * (look - prev)
+        self._pov_look = look
+        fov = float(np.radians(pc["fov_deg"]))
+        for c in self.server.get_clients().values():
+            with c.atomic():
+                c.camera.up_direction = tuple(up)
+                c.camera.fov = fov
+                c.camera.position = tuple(eye)
+                c.camera.look_at = tuple(look)
 
     def fly_to(self, n: dict, client: Any) -> None:
         c = np.array(n["center"])
@@ -686,7 +1385,7 @@ class Sim:
         self.md_loading.content = text
         self.pb.value = frac
         self.b_ask.disabled = on
-        self.b_ask.label = "Copilot is working…" if on else "Ask copilot"
+        self.b_ask.label = "Copilot is working…" if on else "Ask what you want to know"
 
     def run_job(self, tag: str, question: str | None, on_done: Any, allow_paid: bool = True) -> None:
         """Run diagnose() in a thread; show progress bar + elapsed seconds until it returns."""
@@ -736,7 +1435,7 @@ class Sim:
                 print(f"[viewer] briefing failed: {type(e).__name__}: {e}")
                 if self.arrived:
                     self.md_copilot.content = (self.arrival_header() + "⚠️ _Briefing failed; use "
-                                               "**Ask copilot** below._")
+                                               "**Ask what you want to know** below._")
                 return
             finally:
                 self._prefetching = False
@@ -754,15 +1453,16 @@ class Sim:
     def show_diagnosis(self) -> None:
         if not self.arrived or self._diag is None:
             return
-        self.md_copilot.content = self.arrival_header() + to_markdown(self._diag)
+        self.set_object_view(False)
+        tag = self.target["asset"]["tag"]
+        self.md_copilot.content = f"#### 📍 Arrived at {tag}\n\n" + self.equipment_view(tag, self._diag)
         if self._audio:
-            b64 = base64.b64encode(self._audio).decode()
-            self.h_audio.content = (
-                '<div style="font-weight:600;margin:4px 0">🔊 Copilot briefing</div>'
-                f'<audio controls autoplay style="width:100%" src="data:audio/mpeg;base64,{b64}"></audio>')
-            self.h_audio.visible = True
+            self.set_audio(self._audio, f"🔊 Copilot briefing · {tag}")
 
     def on_arrival(self) -> None:
+        if self.walk_mode == "tour":
+            self.show_tab("Info")
+        self.choose_equipment(self.target["asset"]["tag"])
         if self._diag is not None:
             self.show_diagnosis()
             return
@@ -775,15 +1475,18 @@ class Sim:
         self.h_audio.visible = False
         self.h_audio.content = ""                                       # removes the <audio>, stops playback
         if not self._busy:
-            self.md_copilot.content = IDLE_TEXT
+            self.load_equipment(speak=False)
 
     def run(self) -> None:
         self.update()
-        print(f"[viewer] http://localhost:{self.vc['port']}  ({len(self.nodes)} objects, "
+        print(f"[viewer] http://localhost:{self.port}  ({len(self.nodes)} objects, "
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
+        self._init_remote()
+        last_dist = self.dist
         while True:
             now = time.time()
+            self.poll_remote(now)
             if self.playing and now < self.pause_until and self.stop_active is not None:
                 self.blink_stop(now)                                   # pausing at a stop
             elif self.playing and self.stop_active is not None and self.stop_active["kind"] != "target":
@@ -795,8 +1498,16 @@ class Sim:
                 self.update()
                 if self.next_stop < len(self.stops) and self.dist >= self.stop_s[self.next_stop] - 1e-6:
                     self.reach_stop(self.next_stop)
-                if self.dist >= self.s[-1]:
-                    self.playing = False
+                if self.dist >= self.s[-1] and self.next_stop >= len(self.stops):
+                    self.playing = False                               # end reached and every stop visited
+            if self.rig is not None:                                   # walk while moving, else breathe
+                if self.dist != last_dist:
+                    self.rig.walk(self.dist)
+                else:
+                    self.rig.idle(now)
+                last_dist = self.dist
+            if self.cb_pov.value:                                      # every tick, so turns finish smoothly
+                self.update_pov()                                      # even while paused at a stop
             time.sleep(dt)
 
     def reach_stop(self, k: int) -> None:
@@ -805,52 +1516,224 @@ class Sim:
         self.next_stop = k + 1
         self.highlight_stop(st)
         if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
-            self.md_goto.content = (f"✅ **Arrived at {stop_title(st)}**" + (
-                "  \nPress **Ask copilot** (Copilot panel) for a grounded diagnosis of this asset."
-                if st["has_asset"] else "  \n_No asset record: this object is not in the Excel pack._"))
-            if st["has_asset"]:
-                self.dd_asset.value = st["tag"]
+            self.md_walk.content = (f"✅ **Arrived at {stop_title(st)}**" + (
+                "  \nIts data is in the **Info** tab." if st["has_asset"]
+                else "  \n_No asset record: this object is not in the Excel pack._"))
             return
         self.md_stop.content = stop_text(st, k + 1, len(self.stops))
         if st["kind"] != "target":
-            self.pause_until = time.time() + float(self.tour["pause_s"])
+            tc = self.cfg["tour"]
+            if tc.get("brief_at_stops", True) and st.get("has_asset", True) and st["tag"] in self.equip_opt:
+                self.md_stop.content += "  \n_🔊 Copilot summary…_"
+                self.pause_until = time.time() + float(tc.get("brief_wait_s", 12))   # until the audio is ready
+                self.brief_stop(st["tag"])
+            else:
+                self.pause_until = time.time() + float(self.tour["pause_s"])
+
+    def brief_stop(self, tag: str) -> None:
+        """Select the stop's equipment (Info tab follows) and play its spoken copilot summary;
+        the pause then lasts as long as the audio (the target P-002 has its own arrival briefing)."""
+        opt = self.equip_opt[tag]
+        if self.dd_walk.value != opt:
+            self.dd_walk.value = opt
+        if self.dd_equip.value != opt:
+            self.dd_equip.value = opt
+        self.load_equipment(speak=True, on_spoken=lambda audio: self._stop_brief_ready(tag, audio))
+        self.show_tab("Info")
+
+    def _stop_brief_ready(self, tag: str, audio: bytes | None) -> None:
+        if self.walk_mode != "tour" or not self.stop_active or self.stop_active.get("tag") != tag:
+            return                                                  # the worker already moved on / reset
+        tc = self.cfg["tour"]
+        hold = audio_seconds(audio, self.cfg) + float(tc.get("brief_gap_s", 1.0)) if audio else float(tc["pause_s"])
+        hold = max(hold, float(tc["pause_s"]))
+        if self.playing:
+            self.pause_until = time.time() + hold
+        else:                                                       # tour paused meanwhile: resume will use it
+            self.pause_left = hold
+
+    def prefetch_stop_briefings(self) -> None:
+        """Warm the spoken summaries of all tour stops (ElevenLabs once per text; cached after)."""
+        tags = [st["tag"] for st in self.stops if st.get("kind") != "target" and st["tag"] in self.equip_opt]
+
+        def work() -> None:
+            for tag in tags:
+                try:
+                    briefing(diagnose(tag, None, self.cfg, allow_paid=False), tag, self.cfg,
+                             opener=self.summary_opener(tag))
+                except Exception as e:  # noqa: BLE001 - the stop falls back to a plain pause
+                    print(f"[viewer] stop briefing {tag} failed: {type(e).__name__}: {e}")
+        if tags and self.cfg["tour"].get("brief_at_stops", True):
+            threading.Thread(target=work, daemon=True).start()
 
     # --- routes: inspection tour vs. go to one equipment ---
-    def _build_walk_mode_gui(self, g: Any) -> None:
-        """Two clear mode buttons near the top: Inspection tour | Go to equipment."""
-        with g.add_folder("Walk mode"):
-            self.md_mode = g.add_markdown("**Mode: Inspection tour** (door → warning assets → faulty P-002)")
-            b_tour = g.add_button("Inspection tour", color="blue")
-            b_goto = g.add_button("Go to equipment", color="teal")
-            goto_opts = [f"{n['asset']['tag']} · {n['label']} · {n['asset']['condition_state']}"
-                         for n in sorted((n for n in self.nodes if n["asset"]), key=lambda n: n["asset"]["tag"])]
-            self.dd_goto = g.add_dropdown("Equipment", goto_opts, initial_value=goto_opts[0], visible=False)
-            b_goto_tag = g.add_button("Walk to selected equipment", visible=False)
-            b_goto_click = g.add_button("Walk to clicked object", visible=False)
-            self.md_goto = g.add_markdown("", visible=False)
-        self.goto_widgets = (self.dd_goto, b_goto_tag, b_goto_click, self.md_goto)
+    def _build_chat_gui(self, g: Any) -> None:
+        """Chat: quick commands (instant, free) -> Claude Code headless with our MCP tools."""
+        with g.add_folder("Ask the MCP"):
+            self.tx_chat = g.add_text("Question", "Which assets need attention?")
+            b_chat = g.add_button("Ask", color="violet")
+            self.md_chat_status = g.add_markdown("", visible=False)
+            self.md_claude = g.add_markdown("_Checking Claude Code…_")
+            self.md_chat = g.add_markdown("_Type a question or a command (e.g. `take me to M-006`, `start tour`), "
+                                          "then press **Ask**. Type `help` for the quick commands._")
+        self._chat_busy = False
 
-        @b_tour.on_click
-        def _(_e: Any) -> None:
-            if self.walk_mode != "tour":
-                self.set_walk_mode("tour")
+        def check() -> None:                          # free login check, in the background
+            from copilot.chat import claude_status
+            st = claude_status(self.cfg["chat"])
+            self.cfg["chat"]["_status"] = st
+            self.md_claude.content = st["message"]
+        threading.Thread(target=check, daemon=True).start()
 
-        @b_goto.on_click
+        @b_chat.on_click
         def _(_e: Any) -> None:
-            if self.walk_mode != "goto":
-                self.set_walk_mode("goto")
+            q = self.tx_chat.value.strip()
+            if q and not self._chat_busy:
+                threading.Thread(target=self.chat, args=(q,), daemon=True).start()
 
-        @b_goto_tag.on_click
-        def _(_e: Any) -> None:
-            tag = self.dd_goto.value.split(" · ")[0]
-            self.go_to(next(n for n in self.nodes if n["asset"] and n["asset"]["tag"] == tag))
+    def chat_act(self, cmd: str, target: str) -> str:
+        """Viewer actions for quick commands (same handlers as the MCP remote commands)."""
+        if cmd == "tour":
+            res = self.handle_command({"cmd": "tour", "stops": [t for t in target.split(",") if t]})
+        else:
+            res = self.handle_command({"cmd": cmd, "target": target})
+        return ("" if res.get("ok") else "⚠️ ") + res.get("message", "")
 
-        @b_goto_click.on_click
-        def _(_e: Any) -> None:
-            if self.selected is None:
-                self.md_goto.content = "⚠️ Click an object in the 3D view first, then press this button."
-                return
-            self.go_to(self.selected)
+    def chat(self, question: str) -> None:
+        from copilot.chat import answer, parse_quick
+        self._chat_busy = True
+        labels = sorted({n["label"] for n in self.nodes})
+        quick = self.cfg["chat"].get("quick_commands", True) and parse_quick(question, labels) is not None
+        t0 = time.time()
+
+        def tick() -> None:
+            while self._chat_busy:
+                self.md_chat_status.content = (f"⏳ **Claude is working** (copilot tools via MCP) · "
+                                               f"{time.time() - t0:.0f} s")
+                time.sleep(0.5)
+
+        self.md_chat_status.visible = not quick
+        if not quick:
+            threading.Thread(target=tick, daemon=True).start()
+        try:
+            text, route = answer(question, self.cfg["chat"], self.chat_act)
+        except Exception as e:  # noqa: BLE001 - chat must never break the viewer
+            text, route = f"⚠️ {type(e).__name__}: {e}", "error"
+        finally:
+            self._chat_busy = False
+            self.md_chat_status.visible = False
+        badge = "⚡ quick command" if route == "quick" else f"🤖 Claude · {time.time() - t0:.0f} s"
+        self.md_chat.content = f"> **You:** {question}\n\n{text}\n\n_{badge}_"
+
+    def draw_tour_markers(self) -> None:
+        """Numbered floor markers for the current tour stops (replaces any previous markers)."""
+        for h in self.h_tour_markers:
+            h.remove()
+        self.h_tour_markers = []
+        p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
+        sc = self.server.scene
+        for k, st in enumerate(self.stops, 1):
+            q = p[min(st["sample_index"], len(p) - 1)]
+            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
+            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
+            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
+                                                    position=(q[0], q[1] - 0.12, q[2]),
+                                                    anchor="bottom-center", font_screen_scale=0.8))
+
+    # --- remote control (MCP server -> out/viewer_cmd.jsonl -> here) ---
+    def _init_remote(self) -> None:
+        self.cmd_path = out_path(self.cfg, "viewer_cmd.jsonl")
+        self.cmd_offset = self.cmd_path.stat().st_size if self.cmd_path.exists() else 0   # ignore old commands
+        self.next_poll = 0.0
+
+    def poll_remote(self, now: float) -> None:
+        """Heartbeat + execute new commands (show / walk / tour) written by copilot.tools."""
+        if now < self.next_poll:
+            return
+        self.next_poll = now + self.vc.get("remote_poll_s", 0.5)
+        out_path(self.cfg, "viewer_heartbeat").write_text(str(now), encoding="utf-8")
+        if not self.cmd_path.exists() or self.cmd_path.stat().st_size <= self.cmd_offset:
+            return
+        with open(self.cmd_path, encoding="utf-8") as f:
+            f.seek(self.cmd_offset)
+            lines = f.read().splitlines()
+            self.cmd_offset = f.tell()
+        for line in lines:
+            try:
+                c = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                res = self.handle_command(c)
+            except Exception as e:  # noqa: BLE001 - a bad command must never stop the viewer
+                res = {"ok": False, "message": f"{type(e).__name__}: {e}"}
+            with open(out_path(self.cfg, "viewer_cmd_results.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"id": c.get("id"), **res}) + "\n")
+
+    def find_node(self, key: str) -> dict | None:
+        k = str(key).strip().upper()
+        for n in self.nodes:
+            a = n.get("asset")
+            if n["id"].upper() == k or (a and k in (a["tag"].upper(), a["asset_id"].upper())):
+                return n
+        return None
+
+    def nearest_by_label(self, query: str, reachable: bool) -> tuple[dict | None, str]:
+        """Object whose vision label matches `query` (e.g. 'tank' -> 'tank/vessel'): the reachable one with the
+        shortest walk from the worker (reachable=True) or the most confident one (False)."""
+        from copilot.tools import label_matches
+        cands = sorted((n for n in self.nodes if label_matches(n["label"], query)),
+                       key=lambda n: -(n.get("label_confidence") or 0))[: self.vc.get("label_candidates", 10)]
+        if not cands:
+            return None, f"No asset or detected object called '{query}'."
+        if not reachable:
+            return cands[0], f"{len(cands)} '{cands[0]['label']}' object(s); showing the most confident."
+        if self.planner is None:
+            from pipeline.tour import WalkPlanner
+            self.planner = WalkPlanner(self.cfg)
+        p, best = self.position(), None
+        for n in cands:
+            plan = self.planner.to_object(float(p[0]), float(p[2]), n)
+            if plan["ok"] and (best is None or plan["length"] < best[1]):
+                best = (n, plan["length"])
+        if best is None:
+            return None, f"None of the {len(cands)} '{cands[0]['label']}' objects is reachable from here."
+        return best[0], f"nearest reachable of {len(cands)} '{best[0]['label']}' object(s)"
+
+    def handle_command(self, c: dict) -> dict:
+        cmd = c.get("cmd")
+        if cmd in ("show", "walk"):
+            n, why = self.find_node(c.get("target", "")), ""
+            if n is None:                                    # not a tag / id: try a vision label ("tank")
+                n, why = self.nearest_by_label(c.get("target", ""), reachable=cmd == "walk")
+                if n is None:
+                    return {"ok": False, "message": why}
+            name = n["asset"]["tag"] if n.get("asset") else f"{n['id']} ({n['label']})"
+            if cmd == "show":
+                self.select(n)
+                for client in self.server.get_clients().values():
+                    self.fly_to(n, client)
+                return {"ok": True, "message": f"Showing {name} in the viewer (selected, camera moved)"
+                                               + (f"; {why.rstrip('.')}." if why else ".")}
+            self.go_to(n)
+            msg = self.md_walk.content.replace("**", "").replace("⚠️ ", "").replace("🚶 ", "")
+            if why and self.playing:
+                msg = msg.split("  \n")[0] + f" ({why})."
+                self.md_walk.content += f"  \n_{why}_"
+            return {"ok": self.playing, "message": msg}
+        if cmd == "tour":
+            from pipeline.tour import plan_tour
+            t = plan_tour(self.cfg, list(c.get("stops") or []))
+            self.tour, self.tour_route = t, (np.asarray(t["points"], np.float64), t["stops"])
+            self.walk_mode = "goto"                       # force set_walk_mode to rebuild the tour route
+            self.set_walk_mode("tour")
+            self.draw_tour_markers()
+            self.playing = True
+            route = " → ".join(["door"] + [s["tag"] for s in t["stops"]])
+            skipped = "; ".join(f"{s['tag']}: {s['reason']}" for s in t["skipped"]) or "none"
+            return {"ok": True, "message": f"Tour started ({t['mode']}): {route}, "
+                                           f"{t['length'] * self.cfg['scene']['units_to_m']:.1f} m. Skipped: {skipped}"}
+        return {"ok": False, "message": f"Unknown command '{cmd}'."}
 
     def draw_path(self) -> None:
         p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
@@ -877,17 +1760,10 @@ class Sim:
         self.walk_mode = mode
         for h in self.h_tour_markers:
             h.visible = mode == "tour"
-        for w in self.goto_widgets:
-            w.visible = mode == "goto"
-        self.md_mode.content = ("**Mode: Inspection tour** (door → warning assets → faulty P-002)" if mode == "tour"
-                                else "**Mode: Go to equipment** (one asset, from where the worker stands)")
         if mode == "tour":
             self.set_route(*self.tour_route)
             self.md_stop.content = "_Press Play to start the tour._"
-        else:
-            self.md_goto.content = ("Pick equipment and press **Walk to selected equipment**, or click any object "
-                                    "in the 3D view and press **Walk to clicked object**. The worker walks from "
-                                    "where it stands now.")
+            self.md_walk.content = ""
         self.update()
 
     def go_to(self, node: dict) -> None:
@@ -900,12 +1776,14 @@ class Sim:
         p = self.position()
         plan = self.planner.to_object(float(p[0]), float(p[2]), node)
         if not plan["ok"]:
-            self.md_goto.content = f"⚠️ {plan['message']}"
+            self.md_walk.content = f"⚠️ {plan['message']}"
             return
         self.set_route(plan["points"], [goto_record(node, len(plan["points"]) - 1)])
         dest = node["asset"]["tag"] if node.get("asset") else f"{node['id']} ({node['label']})"
         note = "" if node.get("asset") else "  \n_No asset record: this object is not in the Excel pack._"
-        self.md_goto.content = (f"🚶 Walking to **{dest}**: {plan['length'] * self.cfg['scene']['units_to_m']:.1f} m, "
+        if node.get("asset"):
+            self.choose_equipment(node["asset"]["tag"])
+        self.md_walk.content = (f"🚶 Walking to **{dest}**: {plan['length'] * self.cfg['scene']['units_to_m']:.1f} m, "
                                 f"min clearance {plan['min_clearance']:.2f}{note}")
         self.playing = True
 

@@ -34,9 +34,12 @@ DEFAULT_VISION_SOURCES = ("featherless_vision", "gemini_vision")
 
 
 def is_vision_label(a: dict[str, Any], cfg: dict[str, Any], labels: Any = None, min_conf: float = 0.0) -> bool:
-    """True if the object's label comes from a supported vision model (any provider) with enough
-    confidence. Replaces hard-coded `label_source == "gemini_vision"` checks downstream."""
-    srcs = cfg.get("label", {}).get("vision_sources", DEFAULT_VISION_SOURCES)
+    """True for a supported vision or reviewer-confirmed class label with enough confidence.
+
+    Keeps downstream class matching provider-neutral while accepting configured manual sources.
+    """
+    lc = cfg.get("label", {})
+    srcs = [*lc.get("vision_sources", DEFAULT_VISION_SOURCES), *lc.get("manual_sources", [])]
     if a.get("label_source") not in srcs:
         return False
     if labels is not None and a.get("label") not in labels:

@@ -1,0 +1,235 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 18:01:58",
+ "component": {
+  "component_class": "motor",
+  "assembly_id": "RV04-UNIT-L",
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-04"
+ },
+ "views": [
+  {
+   "view": "RV-04/v0",
+   "box": [
+    290.0,
+    35.0,
+    390.0,
+    205.0
+   ],
+   "pos": [],
+   "neg": [
+    [
+     340.0,
+     240.0
+    ]
+   ],
+   "score": 0.884,
+   "mask_px": 10632,
+   "prompt_hash": "2155af7a7c377f760401",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "59f494050c3e851ee638",
+   "camera": {
+    "name": "RV-04-v0",
+    "C": [
+     -2.7,
+     0.1,
+     -2.6
+    ],
+    "R": [
+     [
+      0.822192,
+      -0.0,
+      0.56921
+     ],
+     [
+      0.230428,
+      0.914396,
+      -0.33284
+     ],
+     [
+      -0.520483,
+      0.40482,
+      0.751809
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "1193a8c11709f7cf2409",
+   "buffers_sha": "ecebc97b2d5a827f2800",
+   "mask_file": "MC-0012/rev_001/mask_RV-04_v0.png",
+   "mask_sha": "4baed0c560909d218dd1"
+  },
+  {
+   "view": "RV-04/v1",
+   "box": [
+    552.0,
+    18.0,
+    708.0,
+    242.0
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.975,
+   "mask_px": 21143,
+   "prompt_hash": "e4780652e9c35d75441e",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "673b7c2513554af21c34",
+   "camera": {
+    "name": "RV-04-v1",
+    "C": [
+     -2.7,
+     -0.4,
+     -1.0
+    ],
+    "R": [
+     [
+      -0.5547,
+      0.0,
+      0.83205
+     ],
+     [
+      0.639602,
+      0.639602,
+      0.426401
+     ],
+     [
+      -0.532181,
+      0.768706,
+      -0.354787
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "93dce5c90916c31e702b",
+   "buffers_sha": "0162303aaa94615b9f13",
+   "mask_file": "MC-0012/rev_001/mask_RV-04_v1.png",
+   "mask_sha": "eafc9a7befd765f1dba4"
+  }
+ ],
+ "accepted_at": 1794067318.057462,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-two-view",
+ "stats": {
+  "selected": 425,
+  "disputed": 26,
+  "inferred_unseen": 0,
+  "single_view_only": 15,
+  "multi_view_agree": 410,
+  "uncertain_left": 5,
+  "speckle_dropped": 0,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.965,
+  "disagree_frac": 0.058,
+  "evidence_level": "two-view",
+  "bbox": [
+   [
+    -3.9402,
+    0.2134,
+    -1.308
+   ],
+   [
+    -3.7098,
+    0.6442,
+    -1.1074
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [],
+ "splits": [
+  {
+   "group": 48,
+   "object": "OBJ-0048",
+   "label": "other",
+   "kind": "object",
+   "support": 0.437,
+   "coverage": 0.993,
+   "spatial": 0.372,
+   "voxels_total": 1389,
+   "voxels_moved": 451,
+   "unseen_left_uncertain": 10,
+   "why_not_whole": "spatially inconsistent"
+  }
+ ],
+ "warnings": [
+  "26 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+ ],
+ "per_view": [
+  {
+   "view": "RV-04/v0",
+   "mask_px": 10632,
+   "w_in": 9779.8,
+   "w_gated": 267.5,
+   "gate": 2.059,
+   "voxels_in": 500
+  },
+  {
+   "view": "RV-04/v1",
+   "mask_px": 21143,
+   "w_in": 19678.8,
+   "w_gated": 300.4,
+   "gate": 1.57,
+   "voxels_in": 456
+  }
+ ],
+ "selection_file": "MC-0012/rev_001/selection.npz",
+ "selection_sha": "73b5cafab7219bf579e7"
+}
