@@ -1,0 +1,248 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 17:54:45",
+ "component": {
+  "component_class": "valve",
+  "assembly_id": null,
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-01"
+ },
+ "views": [
+  {
+   "view": "RV-01/v0",
+   "box": [
+    117.3,
+    377.6,
+    214.5,
+    459.6
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.962,
+   "mask_px": 5350,
+   "prompt_hash": "1fded10b282e38b65e2f",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "e26a7ee981df4c73b97b",
+   "camera": {
+    "name": "RV-01-v0",
+    "C": [
+     2.4,
+     0.15,
+     -2.2
+    ],
+    "R": [
+     [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.996815,
+      0.079745
+     ],
+     [
+      0.0,
+      0.079745,
+      -0.996815
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "bcca50ccc2d934399fb4",
+   "buffers_sha": "168061c622d98a0e069a",
+   "mask_file": "MC-0006/rev_001/mask_RV-01_v0.png",
+   "mask_sha": "de9b4b20ad36bd48efc3"
+  },
+  {
+   "view": "RV-01/v1",
+   "box": [
+    175.0,
+    342.7,
+    249.4,
+    401.9
+   ],
+   "pos": [],
+   "neg": [
+    [
+     235.7,
+     391.3
+    ]
+   ],
+   "score": 0.955,
+   "mask_px": 3123,
+   "prompt_hash": "d0b8761bd64aba7e7b4a",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "1000013c54c3ae61ea78",
+   "camera": {
+    "name": "RV-01-v1",
+    "C": [
+     1.4,
+     0.0,
+     -2.5
+    ],
+    "R": [
+     [
+      -0.688749,
+      0.0,
+      -0.724999
+     ],
+     [
+      -0.129299,
+      0.983968,
+      0.122834
+     ],
+     [
+      0.713376,
+      0.178344,
+      -0.677708
+     ]
+    ],
+    "K": [
+     [
+      737.6571367569278,
+      0,
+      383.5
+     ],
+     [
+      0,
+      737.6571367569278,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "cd2136b44e9e10df99b9",
+   "buffers_sha": "48ea96880c658de5cadc",
+   "mask_file": "MC-0006/rev_001/mask_RV-01_v1.png",
+   "mask_sha": "7c0d1179bc5535b9d05d"
+  }
+ ],
+ "accepted_at": 1794066885.5635004,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-two-view",
+ "stats": {
+  "selected": 110,
+  "disputed": 5,
+  "inferred_unseen": 0,
+  "single_view_only": 1,
+  "multi_view_agree": 109,
+  "uncertain_left": 1,
+  "speckle_dropped": 0,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.991,
+  "disagree_frac": 0.043,
+  "evidence_level": "two-view",
+  "bbox": [
+   [
+    2.6886,
+    0.4021,
+    -3.3392
+   ],
+   [
+    2.8107,
+    0.4932,
+    -3.2182
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [],
+ "splits": [
+  {
+   "group": 327,
+   "object": "OBJ-0327",
+   "label": "pipe fitting/flange",
+   "kind": "object",
+   "support": 0.623,
+   "coverage": 0.995,
+   "spatial": 0.654,
+   "voxels_total": 188,
+   "voxels_moved": 96,
+   "unseen_left_uncertain": 1,
+   "why_not_whole": "spatially inconsistent"
+  },
+  {
+   "group": 776,
+   "object": "OBJ-0776",
+   "label": "pressure transmitter/gauge",
+   "kind": "object",
+   "support": 0.461,
+   "coverage": 1.0,
+   "spatial": 0.304,
+   "voxels_total": 69,
+   "voxels_moved": 19,
+   "unseen_left_uncertain": 0,
+   "why_not_whole": "protected (pipe run / structure)"
+  }
+ ],
+ "warnings": [
+  "5 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+ ],
+ "per_view": [
+  {
+   "view": "RV-01/v0",
+   "mask_px": 5350,
+   "w_in": 4935.0,
+   "w_gated": 141.2,
+   "gate": 1.208,
+   "voxels_in": 125
+  },
+  {
+   "view": "RV-01/v1",
+   "mask_px": 3123,
+   "w_in": 2920.0,
+   "w_gated": 70.3,
+   "gate": 1.671,
+   "voxels_in": 110
+  }
+ ],
+ "selection_file": "MC-0006/rev_001/selection.npz",
+ "selection_sha": "cfe10bcb55e92b42e9bb"
+}

@@ -1,0 +1,256 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 17:59:45",
+ "component": {
+  "component_class": "valve",
+  "assembly_id": null,
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-02"
+ },
+ "views": [
+  {
+   "view": "RV-02/v0",
+   "box": [
+    60.0,
+    335.0,
+    255.0,
+    560.0
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.895,
+   "mask_px": 25940,
+   "prompt_hash": "1687972d7864f3811148",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "a117053eb58cef97bf69",
+   "cams_key": "6a3bd671118872282c09",
+   "cam_sha": "f11c2506b8cfb899bf2a",
+   "camera": {
+    "name": "RV-02-v0",
+    "C": [
+     -1.9,
+     0.2,
+     -2.4
+    ],
+    "R": [
+     [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.99083,
+      0.135113
+     ],
+     [
+      0.0,
+      0.135113,
+      -0.99083
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "1e9f2f98fef7c5fb46ac",
+   "buffers_sha": "bd3a72136b03e067db1b",
+   "mask_file": "MC-0008/rev_001/mask_RV-02_v0.png",
+   "mask_sha": "b11d7c850a8ac0c4f785"
+  },
+  {
+   "view": "RV-02/v1",
+   "box": [
+    161.0,
+    281.0,
+    495.0,
+    575.0
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.764,
+   "mask_px": 33392,
+   "prompt_hash": "1e573cd863a085ee2c98",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "a117053eb58cef97bf69",
+   "cams_key": "6a3bd671118872282c09",
+   "cam_sha": "da73114a0a7734b868f0",
+   "camera": {
+    "name": "RV-02-v1",
+    "C": [
+     -1.0,
+     0.1,
+     -2.6
+    ],
+    "R": [
+     [
+      -0.747409,
+      0.0,
+      0.664364
+     ],
+     [
+      0.160608,
+      0.970339,
+      0.180684
+     ],
+     [
+      -0.644658,
+      0.241747,
+      -0.725241
+     ]
+    ],
+    "K": [
+     [
+      737.6571367569278,
+      0,
+      383.5
+     ],
+     [
+      0,
+      737.6571367569278,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "179484705f46c78c8d53",
+   "buffers_sha": "e4c96a25247f0c0ee2e5",
+   "mask_file": "MC-0008/rev_001/mask_RV-02_v1.png",
+   "mask_sha": "9684d04a5d1870a257e4"
+  }
+ ],
+ "accepted_at": 1794067185.9018264,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-two-view",
+ "stats": {
+  "selected": 573,
+  "disputed": 84,
+  "inferred_unseen": 0,
+  "single_view_only": 48,
+  "multi_view_agree": 525,
+  "uncertain_left": 17,
+  "speckle_dropped": 1,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.916,
+  "disagree_frac": 0.128,
+  "evidence_level": "two-view",
+  "bbox": [
+   [
+    -1.6804,
+    0.4113,
+    -3.5926
+   ],
+   [
+    -1.4861,
+    0.809,
+    -3.1779
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [
+  {
+   "group": 108,
+   "object": "OBJ-0108",
+   "label": "manual valve/handwheel",
+   "kind": "object",
+   "support": 0.927,
+   "coverage": 1.0,
+   "spatial": 1.0,
+   "voxels_total": 590,
+   "voxels": 590,
+   "inferred_unseen": 0
+  },
+  {
+   "group": 1016,
+   "object": "OBJ-1016",
+   "label": "pipe segment",
+   "kind": "object",
+   "support": 0.774,
+   "coverage": 1.0,
+   "spatial": 1.0,
+   "voxels_total": 24,
+   "voxels": 24,
+   "inferred_unseen": 0
+  }
+ ],
+ "splits": [
+  {
+   "group": 24,
+   "object": "OBJ-0024",
+   "label": "pipe segment",
+   "kind": "object",
+   "support": 0.024,
+   "coverage": 0.45,
+   "spatial": 0.04,
+   "voxels_total": 3399,
+   "voxels_moved": 44,
+   "unseen_left_uncertain": 1870,
+   "why_not_whole": "protected (pipe run / structure)"
+  }
+ ],
+ "warnings": [
+  "OBJ-0024: only 45% observed in these views, so only its visible supported part moves; 1870 unseen voxels stay (uncertain)",
+  "84 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+ ],
+ "per_view": [
+  {
+   "view": "RV-02/v0",
+   "mask_px": 25940,
+   "w_in": 23622.4,
+   "w_gated": 1041.0,
+   "gate": 1.174,
+   "voxels_in": 548
+  },
+  {
+   "view": "RV-02/v1",
+   "mask_px": 33392,
+   "w_in": 30242.7,
+   "w_gated": 911.4,
+   "gate": 1.33,
+   "voxels_in": 671
+  }
+ ],
+ "selection_file": "MC-0008/rev_001/selection.npz",
+ "selection_sha": "b9bab35dd9ffbeb6886f"
+}

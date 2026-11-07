@@ -16,6 +16,7 @@ from pipeline.common import is_vision_label
 def test_budget_and_offline(tmp_path, monkeypatch):
     import copilot.llm as llm
     monkeypatch.setattr(llm, "ROOT", tmp_path)
+    monkeypatch.delenv("VALMET_OFFLINE", raising=False)
     cc = {"model": "m", "api_key_env": "NOPE_KEY", "base_url": "http://127.0.0.1:9", "temperature": 0,
           "budget": {"max_paid_requests": 0, "ledger": "ledger.jsonl"}}
     monkeypatch.setenv("NOPE_KEY", "x")

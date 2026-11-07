@@ -1,0 +1,261 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 17:29:35",
+ "component": {
+  "component_class": "pump",
+  "assembly_id": "RV01-PUMPB",
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-01"
+ },
+ "views": [
+  {
+   "view": "RV-01/v0",
+   "box": [
+    439.7,
+    29.9,
+    585.3,
+    200.7
+   ],
+   "pos": [],
+   "neg": [],
+   "score": 0.897,
+   "mask_px": 12491,
+   "prompt_hash": "505b923920eadc6004f2",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "e26a7ee981df4c73b97b",
+   "camera": {
+    "name": "RV-01-v0",
+    "C": [
+     2.4,
+     0.15,
+     -2.2
+    ],
+    "R": [
+     [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.996815,
+      0.079745
+     ],
+     [
+      0.0,
+      0.079745,
+      -0.996815
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "bcca50ccc2d934399fb4",
+   "buffers_sha": "168061c622d98a0e069a",
+   "mask_file": "MC-0002/rev_001/mask_RV-01_v0.png",
+   "mask_sha": "6859e1c297731a3aed2f"
+  },
+  {
+   "view": "RV-01/v1",
+   "box": [
+    324.5,
+    12.7,
+    570.7,
+    205.9
+   ],
+   "pos": [
+    [
+     443.7,
+     158.3
+    ]
+   ],
+   "neg": [
+    [
+     464.8,
+     241.7
+    ],
+    [
+     542.9,
+     85.5
+    ],
+    [
+     463.5,
+     25.9
+    ]
+   ],
+   "score": 0.877,
+   "mask_px": 17284,
+   "prompt_hash": "1b7d29fd44c74bf94168",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "736c5954d9a0f13b1894",
+   "cams_key": "47819e18db780a3f3440",
+   "cam_sha": "1000013c54c3ae61ea78",
+   "camera": {
+    "name": "RV-01-v1",
+    "C": [
+     1.4,
+     0.0,
+     -2.5
+    ],
+    "R": [
+     [
+      -0.688749,
+      0.0,
+      -0.724999
+     ],
+     [
+      -0.129299,
+      0.983968,
+      0.122834
+     ],
+     [
+      0.713376,
+      0.178344,
+      -0.677708
+     ]
+    ],
+    "K": [
+     [
+      737.6571367569278,
+      0,
+      383.5
+     ],
+     [
+      0,
+      737.6571367569278,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "cd2136b44e9e10df99b9",
+   "buffers_sha": "48ea96880c658de5cadc",
+   "mask_file": "MC-0002/rev_001/mask_RV-01_v1.png",
+   "mask_sha": "ccd165e34bb9e3872857"
+  }
+ ],
+ "accepted_at": 1794065375.0373273,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-two-view",
+ "stats": {
+  "selected": 400,
+  "disputed": 42,
+  "inferred_unseen": 0,
+  "single_view_only": 16,
+  "multi_view_agree": 384,
+  "uncertain_left": 2,
+  "speckle_dropped": 0,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.96,
+  "disagree_frac": 0.095,
+  "evidence_level": "two-view",
+  "bbox": [
+   [
+    2.0871,
+    -0.167,
+    -3.5162
+   ],
+   [
+    2.2819,
+    0.0607,
+    -3.2095
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [],
+ "splits": [
+  {
+   "group": 12,
+   "object": "OBJ-0012",
+   "label": "wall",
+   "kind": "object",
+   "support": 0.085,
+   "coverage": 0.724,
+   "spatial": 0.067,
+   "voxels_total": 5471,
+   "voxels_moved": 228,
+   "unseen_left_uncertain": 1509,
+   "why_not_whole": "spatially inconsistent"
+  },
+  {
+   "group": 152,
+   "object": "OBJ-0152",
+   "label": "pump",
+   "kind": "object",
+   "support": 0.386,
+   "coverage": 1.0,
+   "spatial": 0.644,
+   "voxels_total": 410,
+   "voxels_moved": 214,
+   "unseen_left_uncertain": 0,
+   "why_not_whole": "spatially inconsistent"
+  }
+ ],
+ "warnings": [
+  "42 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve"
+ ],
+ "per_view": [
+  {
+   "view": "RV-01/v0",
+   "mask_px": 12491,
+   "w_in": 11261.8,
+   "w_gated": 549.2,
+   "gate": 1.299,
+   "voxels_in": 494
+  },
+  {
+   "view": "RV-01/v1",
+   "mask_px": 17284,
+   "w_in": 16127.1,
+   "w_gated": 224.5,
+   "gate": 1.349,
+   "voxels_in": 472
+  }
+ ],
+ "selection_file": "MC-0002/rev_001/selection.npz",
+ "selection_sha": "ca76f095e5556a3e954f"
+}

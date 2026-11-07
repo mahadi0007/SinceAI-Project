@@ -1,0 +1,269 @@
+{
+ "rev": 1,
+ "status": "accepted",
+ "t": "2026-11-07 18:01:34",
+ "component": {
+  "component_class": "pump",
+  "assembly_id": "RV04-UNIT-R",
+  "asset": {
+   "tag": null,
+   "status": "unassigned",
+   "note": "workbook identity is separate from this boundary; not verified by it"
+  },
+  "note": "",
+  "region": "RV-04"
+ },
+ "views": [
+  {
+   "view": "RV-04/v0",
+   "box": [
+    438.0,
+    180.0,
+    640.0,
+    335.0
+   ],
+   "pos": [
+    [
+     560.0,
+     260.0
+    ]
+   ],
+   "neg": [
+    [
+     548.0,
+     120.0
+    ],
+    [
+     455.0,
+     330.0
+    ]
+   ],
+   "score": 0.836,
+   "mask_px": 13977,
+   "prompt_hash": "0e2c9caed25aa4480115",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "59f494050c3e851ee638",
+   "camera": {
+    "name": "RV-04-v0",
+    "C": [
+     -2.7,
+     0.1,
+     -2.6
+    ],
+    "R": [
+     [
+      0.822192,
+      -0.0,
+      0.56921
+     ],
+     [
+      0.230428,
+      0.914396,
+      -0.33284
+     ],
+     [
+      -0.520483,
+      0.40482,
+      0.751809
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "1193a8c11709f7cf2409",
+   "buffers_sha": "ecebc97b2d5a827f2800",
+   "mask_file": "MC-0011/rev_001/mask_RV-04_v0.png",
+   "mask_sha": "bff943782e3e5e4a485d"
+  },
+  {
+   "view": "RV-04/v1",
+   "box": [
+    335.0,
+    392.0,
+    602.0,
+    556.0
+   ],
+   "pos": [
+    [
+     440.0,
+     480.0
+    ]
+   ],
+   "neg": [
+    [
+     470.0,
+     330.0
+    ]
+   ],
+   "score": 0.839,
+   "mask_px": 17628,
+   "prompt_hash": "321e5cf1872f27fe0a7f",
+   "sam_model": "facebook/sam2.1-hiera-tiny",
+   "orig_size": [
+    768,
+    576
+   ],
+   "render_key": "bd511361323644e48e8d",
+   "cams_key": "8a0996141927757a38e2",
+   "cam_sha": "673b7c2513554af21c34",
+   "camera": {
+    "name": "RV-04-v1",
+    "C": [
+     -2.7,
+     -0.4,
+     -1.0
+    ],
+    "R": [
+     [
+      -0.5547,
+      0.0,
+      0.83205
+     ],
+     [
+      0.639602,
+      0.639602,
+      0.426401
+     ],
+     [
+      -0.532181,
+      0.768706,
+      -0.354787
+     ]
+    ],
+    "K": [
+     [
+      665.1075101064489,
+      0,
+      383.5
+     ],
+     [
+      0,
+      665.1075101064489,
+      287.5
+     ],
+     [
+      0,
+      0,
+      1
+     ]
+    ],
+    "W": 768,
+    "H": 576
+   },
+   "image_sha": "93dce5c90916c31e702b",
+   "buffers_sha": "0162303aaa94615b9f13",
+   "mask_file": "MC-0011/rev_001/mask_RV-04_v1.png",
+   "mask_sha": "f9dd4e5f81134872dffc"
+  }
+ ],
+ "accepted_at": 1794067294.2889054,
+ "base_seg": "out",
+ "base_seg_rev": "4654498388d2c552",
+ "renderer": "ewa",
+ "sam_model": "facebook/sam2.1-hiera-tiny",
+ "boundary_status": "accepted-provisional",
+ "stats": {
+  "selected": 390,
+  "disputed": 81,
+  "inferred_unseen": 0,
+  "single_view_only": 17,
+  "multi_view_agree": 373,
+  "uncertain_left": 3,
+  "speckle_dropped": 52,
+  "structure_untouched": 0,
+  "views_used": 2,
+  "agree_frac": 0.956,
+  "disagree_frac": 0.172,
+  "evidence_level": "views-disagree",
+  "bbox": [
+   [
+    -3.3745,
+    0.5872,
+    -1.4137
+   ],
+   [
+    -3.0866,
+    0.839,
+    -0.9722
+   ]
+  ],
+  "overlaps": {}
+ },
+ "members": [],
+ "splits": [
+  {
+   "group": 16,
+   "object": "OBJ-0016",
+   "label": "pipe segment",
+   "kind": "object",
+   "support": 0.058,
+   "coverage": 0.499,
+   "spatial": 0.062,
+   "voxels_total": 4674,
+   "voxels_moved": 84,
+   "unseen_left_uncertain": 2344,
+   "why_not_whole": "low coverage"
+  },
+  {
+   "group": 45,
+   "object": "OBJ-0045",
+   "label": "pump",
+   "kind": "object",
+   "support": 0.271,
+   "coverage": 1.0,
+   "spatial": 0.37,
+   "voxels_total": 1595,
+   "voxels_moved": 439,
+   "unseen_left_uncertain": 0,
+   "why_not_whole": "spatially inconsistent"
+  }
+ ],
+ "warnings": [
+  "OBJ-0016: only 50% observed in these views, so only its visible supported part moves; 2344 unseen voxels stay (uncertain)",
+  "81 voxels disputed between views (inside the mask in one view, outside in another): excluded; add include/exclude points to resolve",
+  "views disagree: resolve in the second view before relying on it"
+ ],
+ "per_view": [
+  {
+   "view": "RV-04/v0",
+   "mask_px": 13977,
+   "w_in": 10691.7,
+   "w_gated": 2378.0,
+   "gate": 1.84,
+   "voxels_in": 778
+  },
+  {
+   "view": "RV-04/v1",
+   "mask_px": 17628,
+   "w_in": 16342.2,
+   "w_gated": 72.1,
+   "gate": 1.575,
+   "voxels_in": 480
+  }
+ ],
+ "selection_file": "MC-0011/rev_001/selection.npz",
+ "selection_sha": "42cf78197ff4b3903252"
+}

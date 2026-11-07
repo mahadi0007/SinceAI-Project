@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import viser
 from scipy.spatial import cKDTree
+from viser.transforms import SO3
 
 from copilot.agent import STATUS_DOT, diagnose, to_markdown
 from copilot.card import DETAIL_SECTIONS, asset_card, asset_details
@@ -72,6 +73,11 @@ EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4),
 def load_scene(cfg: Cfg) -> tuple[dict, dict, dict | None]:
     """Scene graph, walk path, and the inspection tour (out/tour.json) if enabled and present.
     With a tour, the walk follows the tour points instead of the direct path."""
+    from pipeline.correct import downstream_stale
+    for name in ("scene_graph.json", "path.json"):
+        why = downstream_stale(out_path(cfg, name).parent, name)
+        if why:
+            raise SystemExit(f"[viewer] {why}")
     with open(out_path(cfg, "scene_graph.json"), encoding="utf-8") as f:
         sg = json.load(f)
     with open(out_path(cfg, "path.json"), encoding="utf-8") as f:
@@ -275,12 +281,33 @@ class Sim:
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.selected: dict | None = None
-        self.server = viser.ViserServer(port=self.vc["port"])
+        self.node_by_id = {n["id"]: n for n in self.nodes}
+        self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
+        self.inst: dict[str, dict] = {}              # shown instances (originals + copies) by name
+        self.sel_inst: str | None = None
+        self._picked_inst: str | None = None
+        self.show_movable = False
+        self.gizmo: Any = None
+        from api.annotate import free_port
+        self.port = free_port(self.vc["port"])          # another viewer may already hold the configured port
+        if self.port != self.vc["port"]:
+            print(f"[viewer] port {self.vc['port']} is in use; using {self.port}")
+        self.server = viser.ViserServer(port=self.port)
         self.server.scene.set_up_direction(self.cfg["scene"]["up_direction"])
         self._labels: list[Any] = []
         self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
+        self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
+        self.h_corr_acc: list[Any] = []
+        self.annot: Any = None
+        try:
+            from api.annotate import start_in_thread
+            self.annot = start_in_thread(cfg, sink=self)
+            self.annot.push_accepted()
+            self.md_correct.content = self.correct_link(self.dd_region.value)
+        except Exception as e:  # noqa: BLE001  (viewer still works without the tool)
+            print(f"[viewer] boundary correction tool unavailable: {e}")
         self.server.scene.on_click()(self.on_scene_click)
 
     # --- splat display groups (ceiling / walls / room) ---
@@ -306,6 +333,23 @@ class Sim:
         self.sp_inside = inside
         self.sp_group = np.where(h > dc["ceiling_cut_h"], "ceiling", np.where(near_wall, "walls", "room"))
         self.h_splat: dict[str, Any] = {}
+        self.sp_movable = np.zeros(len(x), bool)
+        if self.vc["render_splats"]:
+            idx = {n["id"]: i for i, n in enumerate(self.sg["objects"])}
+            for oid, r in self.movable_rows(d["row_ids"]).items():
+                self.sp_movable[r] = True
+                n = self.node_by_id[oid]
+                c = np.array(n["center"])
+                self.movable[oid] = {"c": c, "xyz": x[r] - c, "rgb": d["rgb"][r], "op": self.sp["opacity"][r],
+                                     "cov": self.sp["cov"][r], "pick": self.pick_xyz[self.pick_lab == idx[oid]] - c,
+                                     "box": box_edges(np.array(n["bbox_min"]) - c, np.array(n["bbox_max"]) - c)}
+
+    def movable_rows(self, row_ids: np.ndarray) -> dict[str, np.ndarray]:
+        p = out_path(self.cfg, "removable_rows.npz")
+        if not p.exists():
+            return {}
+        z = np.load(p)
+        return {oid: np.searchsorted(row_ids, z[oid]) for oid in z.files if oid in self.node_by_id}
 
     def rebuild_splats(self, dark_threshold: float, crop: bool) -> dict[str, int]:
         """(Re)send the three splat groups with the brightness / crop filter; keep their visibility."""
@@ -315,7 +359,7 @@ class Sim:
             keep &= self.sp_inside
         counts = {}
         for g in ("room", "walls", "ceiling"):
-            m = keep & (self.sp_group == g)
+            m = keep & (self.sp_group == g) & ~self.sp_movable
             vis = self.h_splat[g].visible if g in self.h_splat else self.vc["display"].get(f"show_{g}", True)
             if self.vc["render_splats"]:
                 h = sc.add_gaussian_splats(f"/splat/{g}", centers=self.sp["xyz"][m], rgbs=self.sp["rgb"][m],
@@ -333,7 +377,7 @@ class Sim:
         sc = self.server.scene
         self._load_splat_groups()
         self.rebuild_splats(self.vc["display"]["dark_threshold"], self.vc["display"]["crop_outside_walls"])
-        segs, cols = edges_for(self.nodes, self.vc["colors"])
+        segs, cols = edges_for([n for n in self.nodes if n["id"] not in self.movable], self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
         # before/after: baseline boxes (orange) and repaired objects (magenta = context, cyan = geometry)
@@ -371,13 +415,18 @@ class Sim:
         self.is_equipment = [bool(n["asset"]) or n["label"] not in self.vc["near_label_skip"]
                              for n in self.nodes]
         mode = self.vc["label_mode"]
-        self.h_all_labels = [sc.add_label(f"/all_labels/{n['id']}", label_text(n),
-                                          position=(n["center"][0], n["bbox_min"][1], n["center"][2]),
+        for oid in self.movable:
+            self.add_instance(oid, oid)
+        self.h_all_labels = [sc.add_label(f"/movable/{n['id']}/label" if n["id"] in self.movable else
+                                          f"/all_labels/{n['id']}", label_text(n),
+                                          position=((0.0, n["bbox_min"][1] - n["center"][1], 0.0) if n["id"] in self.movable
+                                                    else (n["center"][0], n["bbox_min"][1], n["center"][2])),
                                           anchor="bottom-center",
                                           font_screen_scale=(self.vc["equipment_label_scale"] if eq
                                                              else self.vc["all_label_scale"]),
                                           visible=label_visible(mode, eq))
                              for n, eq in zip(self.nodes, self.is_equipment)]
+        self.load_edits()
         self._build_avatar()
         sc.add_icosphere("/avatar/ring", radius=1.0, color=tuple(self.vc["avatar"]["ring_color"]),
                          opacity=0.15,
@@ -487,6 +536,9 @@ class Sim:
             self._build_equipment_tab(g)
         with tabs.add_tab("Ask the MCP", icon="messages"):
             self._build_chat_gui(g)
+        if self.movable:
+            with tabs.add_tab("Edit scene", icon="arrows-move"):
+                self._build_edit_tab(g)
         with tabs.add_tab("More", icon="settings"):
             self._build_more_tab(g)
 
@@ -826,7 +878,6 @@ class Sim:
         with g.add_folder("Clicked object", expand_by_default=False):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
-            b_fly = g.add_button("Fly to object")
             self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Boundary repair: before / after", expand_by_default=False):
@@ -843,6 +894,11 @@ class Sim:
             self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             self.md_render = g.add_markdown("", visible=False)
             self.img_render = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+            self.md_correct = g.add_markdown(self.correct_link("-"))
+            self.cb_corr = g.add_checkbox("Show correction preview", True)
+            g.add_markdown("<small>Preview: green = selected (2+ views), orange = one view only, red = disputed "
+                           "(excluded), yellow = unseen, left uncertain, blue = unseen, inferred with whole objects. "
+                           "Magenta frames = accepted, cyan = applied.</small>")
 
         @self.cb_pov.on_update
         def _(_e: Any) -> None:
@@ -868,6 +924,8 @@ class Sim:
         @self.cb_boxes.on_update
         def _(_e: Any) -> None:
             self.h_boxes.visible = self.cb_boxes.value
+            for it in self.inst.values():
+                it["box"].visible = self.cb_boxes.value
 
         @self.sl_radius.on_update
         def _(_e: Any) -> None:
@@ -892,11 +950,6 @@ class Sim:
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
 
-        @b_fly.on_click
-        def _(e: Any) -> None:
-            if self.selected is not None:
-                self.fly_to(self.selected, e.client)
-
         @self.b_identify.on_click
         def _(_e: Any) -> None:
             if self.selected is None:
@@ -908,6 +961,11 @@ class Sim:
                 from pipeline.label import identify_object
                 self.md_identify.content = identify_object(n, self.cfg)
             threading.Thread(target=work, daemon=True).start()
+
+        @self.cb_corr.on_update
+        def _(_e: Any) -> None:
+            for h in self.h_corr + self.h_corr_acc:
+                h.visible = self.cb_corr.value
 
         @self.cb_base.on_update
         def _(_e: Any) -> None:
@@ -928,6 +986,7 @@ class Sim:
                 cl.camera.position = tuple(v["eye"])
                 cl.camera.look_at = tuple(v["target"])
             refs = ", ".join(f"{x['id']} {x['cls']}" for x in r["refs"]) or "none (qualitative)"
+            self.md_correct.content = self.correct_link(rid)
             self.md_region.content = f"**{rid}** {r['name']}  \nReferences: {refs}"
             img = ROOT / "out_review" / "compare" / f"{rid}_v0.png"
             if img.exists():
@@ -945,6 +1004,56 @@ class Sim:
                                           "rows = clean RGB | depth | visibility | fragment overlay")
                 self.img_render.image = np.asarray(im)
                 self.md_render.visible = self.img_render.visible = True
+
+    def correct_link(self, rid: str) -> str:
+        if getattr(self, "annot", None) is None:
+            return "_Boundary correction tool not running yet._"
+        port = self.annot.port
+        q = f"?region={rid}" if rid != "-" else ""
+        return (f"**Correct boundaries:** [open the correction tool](http://localhost:{port}/{q}) "
+                f"(draw a box, include/exclude, SAM mask, second view, accept/undo; manual prompts only).")
+
+    # --- boundary-correction preview sink (called from the annotation server thread) ---
+    def clear_correction(self) -> None:
+        for h in self.h_corr:
+            h.remove()
+        self.h_corr = []
+
+    def show_correction(self, cid: str, layers: dict, colors: dict, bbox: Any, cam: Any) -> None:
+        self.clear_correction()
+        sc = self.server.scene
+        vis = self.cb_corr.value
+        for name, P in layers.items():
+            if len(P):
+                self.h_corr.append(sc.add_point_cloud(f"/correction/{name}", np.asarray(P, np.float32),
+                                                      colors[name], point_size=0.014, visible=vis))
+        if bbox:
+            self.h_corr.append(sc.add_line_segments("/correction/box", box_edges(*bbox), (255, 255, 255),
+                                                    thickness=3.0, thickness_units="screen", visible=vis))
+            self.h_corr.append(sc.add_label("/correction/label", f"{cid} (preview)",
+                                            position=((bbox[0][0] + bbox[1][0]) / 2, bbox[0][1] - 0.05,
+                                                      (bbox[0][2] + bbox[1][2]) / 2), anchor="bottom-center"))
+        if cam is not None and bbox:
+            c = (np.array(bbox[0]) + np.array(bbox[1])) / 2
+            for cl in self.server.get_clients().values():
+                cl.camera.position = tuple(cam.C)
+                cl.camera.look_at = tuple(c)
+
+    def show_accepted(self, items: list[dict]) -> None:
+        for h in self.h_corr_acc:
+            h.remove()
+        self.h_corr_acc = []
+        sc = self.server.scene
+        for it in items:
+            col = (0, 220, 255) if it["status"] == "applied" else (255, 0, 200)
+            bb = it["bbox"]
+            self.h_corr_acc.append(sc.add_line_segments(f"/corrections/{it['cid']}", box_edges(*bb), col,
+                                                        thickness=2.5, thickness_units="screen"))
+            self.h_corr_acc.append(sc.add_label(f"/corrections/{it['cid']}_label",
+                                                f"{it['cid']} {it['cls']} · {it['status']} · {it['evidence']}",
+                                                position=((bb[0][0] + bb[1][0]) / 2, bb[0][1] - 0.05,
+                                                          (bb[0][2] + bb[1][2]) / 2), anchor="bottom-center",
+                                                font_screen_scale=0.7))
 
     @staticmethod
     def review_regions() -> dict:
@@ -1013,31 +1122,51 @@ class Sim:
         objs = self.sg["objects"]
         hit = (t > 0) & (perp < tol) & (self.pick_lab >= 0)
         hit &= np.array([objs[i]["kind"] == "object" for i in range(len(objs))])[np.maximum(self.pick_lab, 0)]
-        if not hit.any():
-            return None
-        k = np.where(hit)[0][np.argmin(t[hit])]
-        return objs[int(self.pick_lab[k])]
+        hit &= ~np.isin(self.pick_lab, [i for i, o in enumerate(objs) if o["id"] in self.movable])
+        best = (float(t[hit].min()), objs[int(self.pick_lab[np.where(hit)[0][np.argmin(t[hit])]])], None) \
+            if hit.any() else (np.inf, None, None)
+        for name, it in self.inst.items():                    # movable objects where they are now
+            if it["removed"]:
+                continue
+            R = SO3(np.asarray(it["h"].wxyz)).as_matrix()
+            o, dl = R.T @ (origin - np.asarray(it["h"].position)), R.T @ d
+            v = self.movable[it["oid"]]["pick"] - o
+            t = v @ dl
+            perp = np.linalg.norm(v - np.outer(t, dl), axis=1)
+            ok = (t > 0) & (perp < self.vc["pick_radius"] + self.vc["pick_radius_per_unit"] * np.maximum(t, 0))
+            if ok.any() and float(t[ok].min()) < best[0]:
+                best = (float(t[ok].min()), self.node_by_id[it["oid"]], name)
+        self._picked_inst = best[2]
+        return best[1]
 
     def on_scene_click(self, e: Any) -> None:
         n = self.pick(np.array(e.ray_origin), np.array(e.ray_direction))
         if n is not None:
-            self.select(n)
+            self.select(n, inst=self._picked_inst)
 
-    def mark_selected(self, n: dict) -> None:
-        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour."""
-        segs, _ = edges_for([n], self.vc["colors"])
+    def mark_selected(self, n: dict, segs: np.ndarray | None = None) -> None:
+        """Highlight the selected object in 3D: thick frame + translucent fill in the selection colour.
+        segs: the object's current box edges (a moved instance); default = its box in the scan."""
+        if segs is None:
+            segs, _ = edges_for([n], self.vc["colors"])
         col = np.array(self.vc["selected_color"], np.uint8)
         self.h_selected.points = segs
         self.h_selected.colors = np.tile(col, (len(segs), 2, 1))
-        lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
+        pts = np.asarray(segs).reshape(-1, 3)
+        lo, hi = pts.min(0), pts.max(0)
         pad = self.vc["stop_fill_pad"]
         self.h_selected_fill = self.server.scene.add_box(          # same name -> replaces the previous one
             "/selected_fill", tuple(int(c) for c in col), tuple(hi - lo + 2 * pad), position=tuple((lo + hi) / 2),
             opacity=self.vc.get("selected_fill_opacity", 0.22), cast_shadow=False, receive_shadow=False)
 
-    def select(self, n: dict) -> None:
+    def select(self, n: dict, inst: str | None = None) -> None:
         self.selected = n
-        self.mark_selected(n)
+        self.sel_inst = inst if inst is not None or n["id"] not in self.movable else n["id"]
+        self.hide_gizmo()
+        if self.movable:
+            self.md_edit.content = (f"**{self.sel_inst}** selected." if self.sel_inst else
+                                    "_This object can't be edited; pick one of the movable objects._")
+        self.mark_selected(n, self.inst_box(self.sel_inst) if self.sel_inst else None)
         self.md_sel.content = selection_text(n, self.cfg["scene"]["units_to_m"])
         crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
         if crop.exists():
@@ -1051,6 +1180,144 @@ class Sim:
         self.md_clicked.content = f"Selected: {what}"
         if n["asset"]:                                               # clicked equipment -> Info tab
             self.choose_equipment(n["asset"]["tag"])
+
+    # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
+    def _build_edit_tab(self, g: Any) -> None:
+        g.add_markdown(f"**{len(self.movable)} objects** cut out cleanly and can be moved, removed or duplicated. "
+                       "Click one in the 3D view or pick it below.")
+        dd = g.add_dropdown("Movable object", ["-", *self.movable], initial_value="-")
+        cb_show = g.add_checkbox("Show movable objects", self.show_movable)
+        self.md_edit = g.add_markdown("_Nothing selected._")
+        b_move = g.add_button("Move", icon="arrows-move")
+        b_dup = g.add_button("Duplicate", icon="copy")
+        b_remove = g.add_button("Remove", icon="trash", color="red")
+        b_restore = g.add_button("Restore object", hint="Put it back where it was and delete its copies")
+        b_restore_all = g.add_button("Restore all")
+
+        @dd.on_update
+        def _(e: Any) -> None:
+            if dd.value != "-":
+                self.select(self.node_by_id[dd.value])
+                self.fly_to(self.node_by_id[dd.value], e.client)
+                dd.value = "-"                                          # the same object can be picked again
+
+        @cb_show.on_update
+        def _(_e: Any) -> None:
+            self.show_movable = cb_show.value
+            for it in self.inst.values():
+                it["show"].visible = self.show_movable
+
+        @b_move.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst and not self.inst[self.sel_inst]["removed"]:
+                self.show_gizmo(self.sel_inst)
+
+        @b_dup.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst:
+                src = self.inst[self.sel_inst]
+                oid = src["oid"]
+                k = 1 + max([int(x.rsplit("_copy", 1)[1]) for x in self.inst if x.startswith(oid + "_copy")] or [0])
+                name = f"{oid}_copy{k}"
+                self.add_instance(name, oid, np.asarray(src["h"].position) + np.array(self.vc["duplicate_offset"]),
+                                  src["h"].wxyz)
+                self.select(self.node_by_id[oid], inst=name)
+                self.show_gizmo(name)
+                self.save_edits()
+
+        @b_remove.on_click
+        def _(_e: Any) -> None:
+            if self.sel_inst:
+                if self.sel_inst == self.inst[self.sel_inst]["oid"]:
+                    self.inst[self.sel_inst]["removed"] = True
+                    self.inst[self.sel_inst]["h"].visible = False
+                else:                                                   # a copy is deleted for good
+                    self.inst.pop(self.sel_inst)["h"].remove()
+                self.md_edit.content = f"**{self.sel_inst}** removed."
+                self.sel_inst = None
+                self.hide_gizmo()
+                self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
+                self.save_edits()
+
+        @b_restore.on_click
+        def _(_e: Any) -> None:
+            if self.selected is not None and self.selected["id"] in self.movable:
+                self.restore(self.selected["id"])
+                self.select(self.selected)
+                self.save_edits()
+
+        @b_restore_all.on_click
+        def _(_e: Any) -> None:
+            for oid in self.movable:
+                self.restore(oid)
+            self.hide_gizmo()
+            self.save_edits()
+
+    def add_instance(self, name: str, oid: str, pos: Any = None, wxyz: Any = (1.0, 0.0, 0.0, 0.0)) -> None:
+        """Frame at the object's pose holding its splat, box and label, so they move together."""
+        m, sc = self.movable[oid], self.server.scene
+        h = sc.add_frame(f"/movable/{name}", show_axes=False, position=tuple(m["c"] if pos is None else pos),
+                         wxyz=tuple(wxyz))
+        sc.add_gaussian_splats(f"/movable/{name}/splat", centers=m["xyz"], rgbs=m["rgb"], opacities=m["op"],
+                               covariances=m["cov"])
+        box = sc.add_line_segments(f"/movable/{name}/box", m["box"],
+                                   tuple(self.vc["colors"][status_of(self.node_by_id[oid])]),
+                                   thickness=self.vc["box_thickness"], thickness_units="screen",
+                                   visible=self.cb_boxes.value if hasattr(self, "cb_boxes") else True)
+        show = sc.add_line_segments(f"/movable/{name}/show", m["box"], tuple(self.vc["movable_color"]),
+                                    thickness=self.vc["selected_thickness"], thickness_units="screen",
+                                    visible=self.show_movable)
+        self.inst[name] = {"oid": oid, "h": h, "box": box, "show": show, "removed": False}
+
+    def inst_box(self, name: str) -> np.ndarray:
+        h = self.inst[name]["h"]
+        R = SO3(np.asarray(h.wxyz)).as_matrix()
+        return (self.movable[self.inst[name]["oid"]]["box"] @ R.T + np.asarray(h.position)).astype(np.float32)
+
+    def show_gizmo(self, name: str) -> None:
+        h = self.inst[name]["h"]
+        self.hide_gizmo()
+        self.gizmo = self.server.scene.add_transform_controls(
+            "/gizmo", scale=0.6, position=h.position, wxyz=h.wxyz, depth_test=False,
+            rotation_limits=((0, 0), (-1000, 1000), (0, 0)))               # yaw only (up = -y)
+
+        @self.gizmo.on_update
+        def _(_e: Any) -> None:
+            h.position, h.wxyz = self.gizmo.position, self.gizmo.wxyz
+            self.h_selected.points = self.inst_box(name)
+            self.save_edits()
+
+    def hide_gizmo(self) -> None:
+        if self.gizmo is not None:
+            self.gizmo.remove()
+            self.gizmo = None
+
+    def restore(self, oid: str) -> None:
+        for name in [x for x in self.inst if x.startswith(oid + "_copy")]:
+            self.inst.pop(name)["h"].remove()
+        it = self.inst[oid]
+        it["h"].position, it["h"].wxyz, it["h"].visible = tuple(self.movable[oid]["c"]), (1.0, 0.0, 0.0, 0.0), True
+        it["removed"] = False
+
+    def save_edits(self) -> None:
+        out_path(self.cfg, "viewer_edits.json").write_text(json.dumps(
+            {name: {"oid": it["oid"], "position": [float(x) for x in it["h"].position],
+                    "wxyz": [float(x) for x in it["h"].wxyz], "removed": it["removed"]}
+             for name, it in self.inst.items()}, indent=1), encoding="utf-8")
+
+    def load_edits(self) -> None:
+        p = out_path(self.cfg, "viewer_edits.json")
+        if not p.exists():
+            return
+        for name, e in json.loads(p.read_text(encoding="utf-8")).items():
+            if e["oid"] not in self.movable:
+                continue
+            if name not in self.inst:
+                self.add_instance(name, e["oid"])
+            it = self.inst[name]
+            it["h"].position, it["h"].wxyz = tuple(e["position"]), tuple(e["wxyz"])
+            it["removed"] = e["removed"]
+            it["h"].visible = not e["removed"]
 
     # --- worker point of view ---
     def set_pov(self, on: bool) -> None:
@@ -1212,7 +1479,7 @@ class Sim:
 
     def run(self) -> None:
         self.update()
-        print(f"[viewer] http://localhost:{self.vc['port']}  ({len(self.nodes)} objects, "
+        print(f"[viewer] http://localhost:{self.port}  ({len(self.nodes)} objects, "
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
         self._init_remote()

@@ -9,9 +9,12 @@ fastapi
 uvicorn
 openai
 torch
+torchvision
 transformers>=4.56
 pytest
 pyyaml
 matplotlib
 python-dotenv
 mcp>=2.3,<3
+ifcopenshell
+scikit-image

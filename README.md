@@ -47,6 +47,8 @@ python -m pipeline.mapping
 python -m copilot.agent P-002   # optional: diagnosis from the command line
 python -m copilot.voice --dummy --play   # test the ElevenLabs voice with a sample diagnosis (no LLM/data)
 python -m copilot.voice P-002   # optional: build/cache the spoken briefing (out/voice_cache/)
+VALMET_OUT=out_geo python -m pipeline.export_ifc     # IFC/BIM model with scan meshes + deviation -> scene.ifc
+VALMET_OUT=out_geo python -m viewer.removable   # objects that can be moved/removed/duplicated (viewer.removable.include)
 python -m viewer.app            # open http://localhost:8080 and press Play
 ```
 
@@ -91,6 +93,25 @@ LLM provider is Featherless (`Qwen/Qwen3.5-397B-A17B`, OpenAI-compatible, `copil
 ledger (`llm_ledger.jsonl`), no automatic retries; `VALMET_OFFLINE=1` uses caches/templates only. Measured results,
 method and limitations: `review/RESULTS.md`. Tests: `python -m pytest -q tests`.
 The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id shifts between segmentation versions are safe.
+
+## Guided boundary correction (manual, no paid calls)
+
+`python -m viewer.app` also starts the correction page (default http://localhost:8091, next free port if taken;
+the "Boundary repair" panel links to it). Standalone: `python -m api.annotate` (own Viser preview). Run one at a time:
+both share `review/corrections/`.
+
+Flow: pick region/view -> New component (class optional, default `unknown`) -> Draw box / Include / Exclude ->
+Preview mask (SAM 2.1 on the clean EWA render, cached embedding) -> Preview in 3D (contribution-weighted visible
+support, `pipeline.propose.view_support` + `pipeline.repair.claim_support`) -> open a suggested second view, adjust ->
+Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if needed.
+
+- Corrections and revision history: `review/corrections/` (prompts in original pixels, camera/render/image/buffer
+  hashes, masks, selection). `out/` and the PLY are never modified.
+- Apply replays all active accepted corrections over `out/` into `out_manual/` (`labels_before_manual`,
+  `manual_owner`, per-object membership, `manual_manifest.json`). Stale corrections block Apply. Downstream
+  artifacts of `out_manual/` are listed as stale until regenerated (label -> navgrid -> mapping -> tour).
+- Disputed voxels (inside the mask in one view, visibly outside in another) are excluded and reported; unseen voxels
+  are never claimed except with a whole object that passes support + coverage + spatial checks (reported as inferred).
 
 ## MCP server (ask the copilot from Claude Code / Claude Desktop)
 
