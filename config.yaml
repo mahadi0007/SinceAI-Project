@@ -187,6 +187,8 @@ viewer:
   removable:                # viewer/removable.py: objects that cut out cleanly (only these are editable in viewer.app)
     port: 8098
     include: [OBJ-0045, OBJ-0030, OBJ-0035, OBJ-0048, OBJ-0073]  # hand-confirmed (out_geo ids); empty = run the SAM check
+    include_source: {seg_dir: out_geo, segmentation: b9ccba976377}  # the segmentation those ids belong to; they are
+    include_min_iou: 0.9    # mapped to the current scene by point overlap (never by id) and dropped below this IoU
     skip_labels: [pipe segment, pipe fitting/flange, wall]
     min_points: 150
     min_extent_m: 0.15

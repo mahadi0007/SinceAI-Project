@@ -7,7 +7,9 @@
    must lie inside ours (not split) and ours mostly inside SAM's (not fused), in most views.
 Writes out/removable.json, out/removable_rows.npz (splat rows per object, read by viewer.app) and
 out/removable_sheet.png (each accepted object: view, SAM mask, after removal). viewer.removable.include skips
-the SAM check and keeps exactly those hand-confirmed objects.
+the SAM check and keeps exactly those hand-confirmed objects. Those ids belong to the segmentation named in
+viewer.removable.include_source; they are mapped to the current segmentation by their points (same voxel points,
+IoU >= include_min_iou), never by id. Outputs record the scene revision; previous outputs are backed up first.
 Run: python -m viewer.removable   (Chrome or `playwright install chromium`; viewer.bim_view must not be needed)
 """
 from __future__ import annotations
@@ -21,7 +23,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 from viser.transforms import SO3
 
-from pipeline.common import load_config, out_path
+from pipeline.bim_provenance import ArtifactMismatch, backup, label_revision, scene_revision
+from pipeline.common import ROOT, load_config, out_path
 from pipeline.propose import sam_model
 from pipeline.views import Camera, render
 from viewer.bim_view import BimView
@@ -185,10 +188,44 @@ def outline(img: np.ndarray, mask: np.ndarray, col: tuple[int, int, int]) -> np.
     return out
 
 
-def write(cfg: Cfg, v: BimView, keep: list[dict], recs: list[dict]) -> None:
+def remap_include(cfg: Cfg, v: BimView, rc: Cfg) -> tuple[list[str], dict[str, dict]]:
+    """Hand-confirmed ids from include_source's segmentation -> current ids, by point overlap (IoU)."""
+    src = rc.get("include_source") or {}
+    if not src:
+        return list(rc["include"]), {i: {"id": i, "iou": None, "note": "unscoped list used as-is"} for i in rc["include"]}
+    d = ROOT / src["seg_dir"]
+    seg = np.load(d / "segment_points.npz")
+    if label_revision(seg["labels"]) != src["segmentation"]:
+        raise ArtifactMismatch(f"include_source {src['seg_dir']} is segmentation {label_revision(seg['labels'])}, "
+                               f"not {src['segmentation']}: the hand-confirmed ids no longer apply")
+    cur = np.load(out_path(cfg, "segment_points.npz"))
+    if not np.array_equal(seg["xyz"], cur["xyz"]):
+        raise ArtifactMismatch(f"{src['seg_dir']} has other voxel points than the current scene; ids can't be mapped")
+    ids = {a["id"]: k for k, a in enumerate(json.loads((d / "assets.json").read_text(encoding="utf-8")))}
+    out, mapping = [], {}
+    for oid in rc["include"]:
+        m = seg["labels"] == ids[oid]
+        lab, cnt = np.unique(cur["labels"][m], return_counts=True)
+        j = int(lab[np.argmax(cnt)])
+        iou = float(cnt.max() / (m.sum() + (cur["labels"] == j).sum() - cnt.max())) if j >= 0 else 0.0
+        new = v.objs[j]["id"] if j >= 0 else None
+        mapping[oid] = {"id": new, "iou": round(iou, 4)}
+        if new is None or iou < rc.get("include_min_iou", 0.9) or v.objs[j]["kind"] != "object":
+            print(f"[removable] {src['seg_dir']} {oid}: best match {new} IoU {iou:.3f}: rejected")
+            mapping[oid]["rejected"] = True
+            continue
+        print(f"[removable] {src['seg_dir']} {oid} -> {new} (IoU {iou:.3f}, {v.objs[j].get('label')})")
+        out.append(new)
+    return out, mapping
+
+
+def write(cfg: Cfg, v: BimView, keep: list[dict], recs: list[dict], mapping: dict | None = None) -> None:
     clean = lambda r: {k: r[k] for k in r if k != "key"}                 # noqa: E731
+    backup(cfg, ["removable.json", "removable_rows.npz", "removable_sheet.png"], "removable")
     out_path(cfg, "removable.json").write_text(json.dumps(
-        {"removable": [r["id"] for r in keep], "objects": [clean(r) for r in recs]}, indent=1), encoding="utf-8")
+        {"version": 2, "revision": scene_revision(cfg), "removable": [r["id"] for r in keep],
+         "parts": {r["id"]: [v.objs[m]["id"] for m in v.parts.get(r["key"], [])] for r in keep},
+         "include_mapping": mapping or {}, "objects": [clean(r) for r in recs]}, indent=1), encoding="utf-8")
     np.savez_compressed(out_path(cfg, "removable_rows.npz"),                # splat rows per object, for viewer.app
                         **{r["id"]: v.splat["row_ids"][v._rows(r["key"])] for r in keep})
 
@@ -200,8 +237,13 @@ def run(cfg: Cfg, limit: int | None = None) -> None:
     t = time.time()
     recs = geometry(v, rc)
     if rc.get("include"):                                                   # hand-confirmed list: no SAM pass
-        keep = [r for i in rc["include"] for r in recs if r["id"] == i]
-        write(cfg, v, keep, recs)
+        ids, mapping = remap_include(cfg, v, rc)
+        keep = [r for i in ids for r in recs if r["id"] == i]
+        for r in keep:
+            if "reject" in r:
+                print(f"[removable] note: {r['id']} fails the geometry screen ({r['reject']}, contact "
+                      f"{r.get('contact')}, hole {r.get('hole')}); kept because it is hand-confirmed")
+        write(cfg, v, keep, recs, mapping)
         v.server.stop()
         print(f"[removable] {len(keep)} confirmed objects: {[r['id'] for r in keep]} -> removable.json, removable_rows.npz")
         return

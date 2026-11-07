@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "valmet-copilot": {
-      "command": ".venv/Scripts/python.exe",
+      "command": "${VALMET_PYTHON:-.venv/Scripts/python.exe}",
       "args": ["mcp_server.py"]
     }
   }
