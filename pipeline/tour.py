@@ -145,11 +145,14 @@ def manual_candidates(sg: dict, stops: list[str], target_id: str) -> tuple[list[
     return cands, skipped
 
 
-def plan_tour(cfg: Cfg, stops: list[str] | None = None) -> dict:
+def plan_tour(cfg: Cfg, stops: list[str] | None = None, inputs: tuple | None = None) -> dict:
     """Plan the tour. stops=None -> config tour.stops; empty -> automatic from Excel status;
-    otherwise these tags in this order (manual). The tour always ends at the faulty target."""
+    otherwise these tags in this order (manual). The tour always ends at the faulty target.
+    inputs: (grid, layers, path, sg) for an edited layout (pipeline.layout_nav); default = out/ files."""
     tc, floor_y = cfg["tour"], cfg["scene"]["floor_y"]
-    grid, layers, path, sg = load_inputs(cfg)
+    grid, layers, path, sg = inputs if inputs is not None else load_inputs(cfg)
+    if path.get("goal") is None:
+        raise ValueError(f"the tour target {path['target_object']} is removed or unreachable in this layout")
     walk = layers["walkable"]
     start = nearest_walkable(walk, cell_of(grid, path["start"][0], path["start"][2]))
     end = nearest_walkable(walk, cell_of(grid, path["goal"][0], path["goal"][2]))
@@ -194,9 +197,9 @@ class WalkPlanner:
     """Live single-destination planner for the viewer ("Go to equipment"): from any position to any
     object, on the same inflated grid as the tour. Never raises; failures come back as a message."""
 
-    def __init__(self, cfg: Cfg) -> None:
+    def __init__(self, cfg: Cfg, inputs: tuple | None = None) -> None:
         self.cfg = cfg
-        self.grid, self.layers, _, _ = load_inputs(cfg)
+        self.grid, self.layers, _, _ = inputs if inputs is not None else load_inputs(cfg)
         self.walk = self.layers["walkable"]
 
     def to_object(self, start_x: float, start_z: float, node: dict) -> dict:

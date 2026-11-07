@@ -31,6 +31,7 @@ from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 from skimage.measure import marching_cubes
 
+from pipeline.bim_provenance import backup, label_revision, scene_revision, write_bim_manifest
 from pipeline.common import load_config, out_path
 from pipeline.ifc_families import FAMILIES, flange
 
@@ -56,10 +57,29 @@ ASSET_FIELDS = ["asset_id", "tag", "asset_class", "area_name", "criticality", "h
                 "mapping_method", "mapping_confidence"]
 
 
+# scene axes -> IFC axes (a proper rotation, det +1): ifc = u2m * AXES @ scene
+AXES = np.array([[1.0, 0, 0], [0, 0, 1.0], [0, -1.0, 0]])
+
+
 def to_ifc(v: np.ndarray, u2m: float = 1.0) -> np.ndarray:
     """Scene coords (up = -y) -> IFC coords (up = +z), scaled to metres."""
     v = np.asarray(v, np.float64)
     return np.stack([v[..., 0], v[..., 2], -v[..., 1]], -1) * u2m
+
+
+def from_ifc(v: np.ndarray, u2m: float = 1.0) -> np.ndarray:
+    """IFC coords (up = +z, metres) -> scene coords (up = -y, scan units); inverse of to_ifc."""
+    v = np.asarray(v, np.float64) / u2m
+    return np.stack([v[..., 0], -v[..., 2], v[..., 1]], -1)
+
+
+def rot_to_ifc(R: np.ndarray) -> np.ndarray:
+    """Rotation matrix in scene axes -> the same rotation in IFC axes."""
+    return AXES @ np.asarray(R, np.float64) @ AXES.T
+
+
+def rot_from_ifc(R: np.ndarray) -> np.ndarray:
+    return AXES.T @ np.asarray(R, np.float64) @ AXES
 
 
 def snap_axis(v: np.ndarray, deg: float) -> np.ndarray:
@@ -333,7 +353,13 @@ def export(cfg: Cfg) -> dict[str, Any]:
     order = np.argsort(lab, kind="stable")
     bounds = np.searchsorted(lab[order], np.arange(len(sg["objects"]) + 1))
 
+    rev = scene_revision(cfg, lab)
     w = Writer("Valmet Equipment Room")
+    prov = ifcopenshell.api.run("pset.add_pset", w.f, product=w.project, name="Pset_ScanProvenance")
+    ifcopenshell.api.run("pset.edit_pset", w.f, pset=prov, properties={
+        "SegmentationRevision": rev["segmentation"], "SourcePlySha256": rev["ply_sha256"],
+        "ObjectCount": rev["n_objects"], "UnitsToMetres": float(u2m),
+        "CoordinateMap": "IFC (x, y, z) = UnitsToMetres * scene (x, z, -y); scene up = -y"})
     stats: dict[str, Any] = {"pipes": 0, "meshes": 0, "families": 0, "flanges": 0, "noisy_pipes": 0,
                              "rms_mm": [], "classes": {}}
     pipes: list[dict[str, Any]] = []
@@ -344,7 +370,8 @@ def export(cfg: Cfg) -> dict[str, Any]:
         a = n["asset"] or {}
         ifc_class = IFC_CLASS.get(a.get("asset_class") or n["label"], "IfcBuildingElementProxy")
         name = f"{a['tag']} {n['id']}" if a else n["id"]
-        psets = {"Pset_ScanExtraction": {"ObjectId": n["id"], "Label": n["label"],
+        psets = {"Pset_ScanExtraction": {"ObjectId": n["id"], "SegmentationRevision": rev["segmentation"],
+                                         "Label": n["label"],
                                          "LabelConfidence": n["label_confidence"],
                                          "LabelSource": n["label_source"], "PointCount": n["n_points"]}}
         if a:
@@ -422,11 +449,16 @@ def export(cfg: Cfg) -> dict[str, Any]:
         stats["classes"][cls] = stats["classes"].get(cls, 0) + 1
 
     dev = deviation(w.f, elements, xyz, lab, u2m)
+    if label_revision(np.load(out_path(cfg, "segment_points.npz"))["labels"]) != rev["segmentation"]:
+        raise RuntimeError("segment_points.npz changed during the export; nothing written")
+    backup(cfg, ["scene.ifc", "deviation.npz", "bim_manifest.json"], "bim")
     np.savez_compressed(out_path(cfg, "deviation.npz"), dist_m=dev.astype(np.float32))
     ok = dev[np.isfinite(dev)] * 1000
 
     path = out_path(cfg, "scene.ifc")
     w.f.write(str(path))
+    write_bim_manifest(cfg, rev, [sg["objects"][i]["id"] for i in sorted(elements)],
+                       {k: v for k, v in stats.items() if k != "rms_mm"})
     rms = np.array(stats.pop("rms_mm"))
     print(f"[ifc] {len(elements)} elements: {stats['pipes']} pipes, {stats['families']} equipment families, "
           f"{stats['flanges']} flanges, {stats['meshes']} scan meshes ({stats['noisy_pipes']} noisy pipe fits meshed)"
