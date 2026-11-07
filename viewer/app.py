@@ -5,6 +5,7 @@ Run:    python -m viewer.app      then open http://localhost:8080
 """
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -15,11 +16,12 @@ import viser
 from scipy.spatial import cKDTree
 
 from copilot.agent import diagnose, to_markdown
-from pipeline.common import load_config, out_path, repo_path
+from copilot.voice import briefing
+from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
 
 Cfg = dict[str, Any]
-IDLE_TEXT = "_Press Play: the copilot starts diagnosing the target while the worker walks._"
+IDLE_TEXT = "_Press Play: the copilot briefs the worker once they stand in front of the target._"
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
 
 
@@ -124,7 +126,21 @@ def selection_text(n: dict, u2m: float) -> str:
           f"above floor · {n['n_points']} points" + (" · overhead" if "overhead" in n.get("tags", []) else "")]
     if n.get("label_vlm"):
         v = n["label_vlm"]
-        md += ["", f"_Gemini's low-confidence guess: {v.get('label')} ({v.get('confidence')})_"]
+        md += ["", f"_Vision model's low-confidence guess: {v.get('label')} ({v.get('confidence')})_"]
+    rp = n.get("repair")
+    if rp:
+        if rp.get("family") == "context":
+            md += ["", f"**Repaired boundary** (context): {rp.get('region')}/{rp.get('cid')} proposed as "
+                       f"_{rp.get('cls')}_ ({rp.get('confidence')}) by {rp.get('model')}, refined by SAM 2.1 masks + "
+                       f"visible 3D support. Unverified; revert via `repair.context.disabled`."]
+        else:
+            md += ["", f"**Repaired boundary** (geometry): {len(rp.get('leaves', []))} pipe pieces joined by "
+                       f"centreline/thickness/gap checks."]
+    if n.get("fragments"):
+        md += [f"_{len(n['fragments'])} fine fragment(s); baseline objects: "
+               f"{', '.join(n.get('baseline_ids', [])[:6]) or '-'}_"]
+    if n.get("assembly"):
+        md += [f"_Assembly {n['assembly']['id']} ({n['assembly']['note']})_"]
     a = n["asset"]
     if a:
         md += ["", "| Tag | Class | Health | Status | Urgency |", "|---|---|---|---|---|",
@@ -132,7 +148,8 @@ def selection_text(n: dict, u2m: float) -> str:
                f"{a['urgency']} |", "",
                f"Issue: **{a['issue_code']}**: {a['issue_summary']}  ",
                f"Next check: {a['recommended_next_check']}  ",
-               f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']})_"]
+               f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']}) · identity "
+               f"{'VERIFIED' if a.get('identity_verified') else 'unverified'} ({a.get('identity_basis', '?')})_"]
     else:
         md += ["", "_No asset record in the Excel pack (not mapped)._"]
     return "\n".join(md)
@@ -162,7 +179,14 @@ class Sim:
         self.playing = False
         self.arrived = False
         self._diag: dict | None = None           # prefetched target diagnosis
-        self._busy = False                       # a copilot job is running
+        self._audio: bytes | None = None         # spoken briefing (mp3) for the target
+        self._prefetching = False                # silent target diagnosis + voice running
+        self._busy = False                       # a manual copilot job is running
+        end_gap = self.box_gap(self.target, self.pts[-1])
+        self.arrive_gap = max(float(cfg["viewer"]["voice"]["arrive_gap"]), end_gap + 0.05)
+        if end_gap > cfg["viewer"]["voice"]["arrive_gap"]:
+            print(f"[viewer] path ends {end_gap:.2f} u from the target box; arrive_gap raised to "
+                  f"{self.arrive_gap:.2f}")
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
         self.selected: dict | None = None
@@ -227,6 +251,21 @@ class Sim:
         segs, cols = edges_for(self.nodes, self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
+        # before/after: baseline boxes (orange) and repaired objects (magenta = context, cyan = geometry)
+        bp = ROOT / "out_baseline" / "assets.json"
+        base = [a for a in json.loads(bp.read_text(encoding="utf-8")) if a["kind"] == "object"] if bp.exists() else []
+        self.n_baseline = len(base)
+        bs = np.concatenate([box_edges(a["bbox_min"], a["bbox_max"]) for a in base]) if base else np.zeros((0, 2, 3), np.float32)
+        self.h_base = sc.add_line_segments("/baseline_boxes", bs, (255, 140, 0), thickness=1.5,
+                                           thickness_units="screen", visible=False)
+        ctx = [n for n in self.nodes if n.get("repair", {}).get("family") == "context"]
+        geo = [n for n in self.nodes if n.get("repair", {}).get("family") == "geometry"]
+        self.n_ctx, self.n_geo = len(ctx), len(geo)
+        segs_r = [box_edges(n["bbox_min"], n["bbox_max"]) for n in ctx + geo]
+        cols_r = [np.tile(np.array([255, 0, 200] if n in ctx else [0, 200, 255], np.uint8), (12, 2, 1)) for n in ctx + geo]
+        self.h_rep = sc.add_line_segments("/repaired_boxes", np.concatenate(segs_r) if segs_r else np.zeros((0, 2, 3), np.float32),
+                                          np.concatenate(cols_r) if cols_r else np.zeros((0, 2, 3), np.uint8),
+                                          thickness=3.0, thickness_units="screen", visible=False)
         lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
         p = self.pts + lift
         sc.add_line_segments("/path", np.stack([p[:-1], p[1:]], 1).astype(np.float32),
@@ -299,11 +338,13 @@ class Sim:
 
     def pose_avatar(self, p: np.ndarray, moving: bool) -> None:
         av = self.av
-        tangent = self.tangent()
-        yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> path direction
-        if self.face_target is not None:                                # at a stop: face the equipment
-            to = self.face_target - p
-            yaw = np.arctan2(to[0], to[2])
+        if self.face_target is not None:                                # at a tour stop: face the equipment
+            tangent = self.face_target - p
+        elif self.arrived:                                              # face the target
+            tangent = np.array(self.target["center"]) - p
+        else:
+            tangent = self.tangent()
+        yaw = np.arctan2(tangent[0], tangent[2])                        # local +z -> facing direction
         self.h_avatar.position = tuple(p)
         self.h_avatar.wxyz = (np.cos(yaw / 2), 0.0, np.sin(yaw / 2), 0.0)
         phase = 2 * np.pi * self.dist / av["stride"]
@@ -360,11 +401,51 @@ class Sim:
             md_disp.content = (f"room {c['room']:,} · walls {c['walls']:,} · ceiling {c['ceiling']:,} splats "
                                f"(of {len(self.sp_lum):,})")
         self.dd_labels = g.add_dropdown("Labels", list(LABEL_MODES), initial_value=self.vc["label_mode"])
+        with g.add_folder("Boundary repair: before / after"):
+            g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
+                           f"(magenta) · **{self.n_geo}** geometry pipe joins (cyan)  \nBefore: **{self.n_baseline}** "
+                           f"baseline objects (orange). Fewer boxes is not the goal; check whole components.")
+            self.cb_base = g.add_checkbox("Show baseline boxes (before)", False)
+            self.cb_rep = g.add_checkbox("Highlight repaired objects", True)
+            self.h_rep.visible = True
+            reg = self.review_regions()
+            self.dd_region = g.add_dropdown("Review region", ["-"] + list(reg), initial_value="-")
+            self.md_region = g.add_markdown("_Pick a region: the camera flies to its calibrated view; the image shows "
+                                            "baseline | geometry-only | geometry+context (white = reviewed reference)._")
+            self.img_region = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
+
+        @self.cb_base.on_update
+        def _(_e: Any) -> None:
+            self.h_base.visible = self.cb_base.value
+
+        @self.cb_rep.on_update
+        def _(_e: Any) -> None:
+            self.h_rep.visible = self.cb_rep.value
+
+        @self.dd_region.on_update
+        def _(e: Any) -> None:
+            rid = self.dd_region.value
+            if rid == "-":
+                return
+            r = self.review_regions()[rid]
+            v = r["views"][0]
+            for cl in self.server.get_clients().values():
+                cl.camera.position = tuple(v["eye"])
+                cl.camera.look_at = tuple(v["target"])
+            refs = ", ".join(f"{x['id']} {x['cls']}" for x in r["refs"]) or "none (qualitative)"
+            self.md_region.content = f"**{rid}** {r['name']}  \nReferences: {refs}"
+            img = ROOT / "out_review" / "compare" / f"{rid}_v0.png"
+            if img.exists():
+                from PIL import Image
+                im = Image.open(img).convert("RGB")
+                im.thumbnail((1400, 400))
+                self.img_region.image = np.asarray(im)
+                self.img_region.visible = True
         with g.add_folder("Selected object (click in the scene)"):
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             b_fly = g.add_button("Fly to object", visible=True)
-            self.b_identify = g.add_button("Ask Gemini what this is")
+            self.b_identify = g.add_button("Ask vision model what this is (paid)")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Inspection tour"):
             if self.tour:
@@ -396,7 +477,7 @@ class Sim:
             if self.selected is None:
                 return
             n = self.selected
-            self.md_identify.content = f"_Asking Gemini about {n['id']}…_"
+            self.md_identify.content = f"_Asking {self.cfg['copilot']['model']} about {n['id']}…_"
 
             def work() -> None:
                 from pipeline.label import identify_object
@@ -409,6 +490,7 @@ class Sim:
             self.b_ask = g.add_button("Ask copilot", color="blue")
             self.md_loading = g.add_markdown("", visible=False)
             self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
+            self.h_audio = g.add_html("", visible=False)          # spoken briefing player
             self.md_copilot = g.add_markdown(IDLE_TEXT)
 
         @b_play.on_click
@@ -426,13 +508,12 @@ class Sim:
 
         @b_reset.on_click
         def _(_e: Any) -> None:
-            self.playing, self.dist, self.arrived = False, 0.0, False
+            self.playing, self.dist = False, 0.0
+            self.leave_target()
             self.next_stop, self.pause_until = 0, 0.0
             self.clear_stop_highlight()
             if self.tour:
                 self.md_stop.content = "_Press Play to start the tour._"
-            if not self._busy:
-                self.md_copilot.content = IDLE_TEXT
             self.update()
 
         @self.sl_pos.on_update
@@ -455,12 +536,26 @@ class Sim:
                                             opacity=0.15, scale=(r, 0.01, r))
             self.update()
 
+    @staticmethod
+    def review_regions() -> dict:
+        import yaml
+        p = ROOT / "review" / "regions.yaml"
+        if not p.exists():
+            return {}
+        return {r["id"]: r for r in yaml.safe_load(p.read_text(encoding="utf-8"))["regions"]}
+
     # --- per-frame ---
     def position(self) -> np.ndarray:
         return np.array([np.interp(self.dist, self.s, self.pts[:, k]) for k in range(3)])
 
     def update(self) -> None:
         p = self.position()
+        at_target = self.dist >= self.s[-1] - 1e-6 and self.box_gap(self.target, p) <= self.arrive_gap
+        if at_target and not self.arrived:
+            self.arrived = True
+            self.on_arrival()
+        elif not at_target and self.arrived:
+            self.leave_target()
         self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1])
         r = float(self.sl_radius.value)
         idx = self.tree.query_ball_point(p[[0, 2]], r + self.max_half)
@@ -479,9 +574,6 @@ class Sim:
             font_screen_scale=1.0 if n["asset"] else self.vc["other_label_scale"])
             for n in show]
         self.md_near.content = nearby_text(mapped, others, r)
-        if self.dist >= self.s[-1] - 1e-6 and not self.arrived:
-            self.arrived = True
-            self.on_arrival()
 
     @staticmethod
     def box_gap(n: dict, p: np.ndarray) -> float:
@@ -543,7 +635,7 @@ class Sim:
         self.b_ask.disabled = on
         self.b_ask.label = "Copilot is working…" if on else "Ask copilot"
 
-    def run_job(self, tag: str, question: str | None, on_done: Any) -> None:
+    def run_job(self, tag: str, question: str | None, on_done: Any, allow_paid: bool = True) -> None:
         """Run diagnose() in a thread; show progress bar + elapsed seconds until it returns."""
         if self._busy:
             return
@@ -554,14 +646,14 @@ class Sim:
         def tick() -> None:
             while self._busy:
                 el = time.time() - t0
-                self.set_loading(True, f"⏳ **Gemini is analysing {tag}**{q}\n\n"
+                self.set_loading(True, f"⏳ **Copilot is analysing {tag}**{q}\n\n"
                                        f"Evidence pack → model → citation check · **{el:.0f} s** "
                                        f"(usually ~{expected} s)", min(95.0, 100 * el / expected))
                 time.sleep(0.5)
 
         def work() -> None:
             try:
-                d = diagnose(tag, question, self.cfg)
+                d = diagnose(tag, question, self.cfg, allow_paid=allow_paid)
             finally:
                 self._busy = False
                 self.set_loading(False)
@@ -571,17 +663,33 @@ class Sim:
         threading.Thread(target=work, daemon=True).start()
 
     def prefetch_diagnosis(self) -> None:
-        """Start the target diagnosis while the avatar walks (LLM takes ~20 s)."""
-        if self._diag is not None or self._busy:
+        """Silently prepare the target diagnosis + spoken briefing while the avatar walks
+        (cached/template answer: instant; live Featherless if auto_copilot_paid: ~60 s; TTS a few s).
+        Nothing is shown until the worker stands at the target; if it is still running on arrival,
+        the panel says so and the briefing plays when ready."""
+        if self._diag is not None or self._prefetching:
             return
+        self._prefetching = True
+        tag = self.target["asset"]["tag"]
 
-        def done(d: dict) -> None:
-            self._diag = d
+        def work() -> None:
+            try:
+                # automatic prefetch never spends LLM credits: cached answer for the same evidence,
+                # else template (viewer.auto_copilot_paid: true allows a live Featherless call)
+                d = diagnose(tag, None, self.cfg, allow_paid=self.vc.get("auto_copilot_paid", False))
+                _, audio = briefing(d, tag, self.cfg)
+                self._diag, self._audio = d, audio
+            except Exception as e:  # noqa: BLE001 - show it instead of hanging on "preparing"
+                print(f"[viewer] briefing failed: {type(e).__name__}: {e}")
+                if self.arrived:
+                    self.md_copilot.content = (self.arrival_header() + "⚠️ _Briefing failed; use "
+                                               "**Ask copilot** below._")
+                return
+            finally:
+                self._prefetching = False
             if self.arrived:
                 self.show_diagnosis()
-            else:
-                self.md_copilot.content = "✅ _Diagnosis for the target is ready; it opens on arrival._"
-        self.run_job(self.target["asset"]["tag"], None, done)
+        threading.Thread(target=work, daemon=True).start()
 
     def arrival_header(self) -> str:
         a = self.target["asset"]
@@ -591,14 +699,30 @@ class Sim:
                 f"_3D mapping: {a['mapping_method']} (confidence {a['mapping_confidence']})_\n\n---\n")
 
     def show_diagnosis(self) -> None:
+        if not self.arrived or self._diag is None:
+            return
         self.md_copilot.content = self.arrival_header() + to_markdown(self._diag)
+        if self._audio:
+            b64 = base64.b64encode(self._audio).decode()
+            self.h_audio.content = (
+                '<div style="font-weight:600;margin:4px 0">🔊 Copilot briefing</div>'
+                f'<audio controls autoplay style="width:100%" src="data:audio/mpeg;base64,{b64}"></audio>')
+            self.h_audio.visible = True
 
     def on_arrival(self) -> None:
         if self._diag is not None:
             self.show_diagnosis()
             return
-        self.md_copilot.content = self.arrival_header()
+        self.md_copilot.content = self.arrival_header() + "_🎧 The copilot is preparing your briefing…_"
         self.prefetch_diagnosis()
+
+    def leave_target(self) -> None:
+        """Worker moved away from the target: stop the briefing and hide it until the next arrival."""
+        self.arrived = False
+        self.h_audio.visible = False
+        self.h_audio.content = ""                                       # removes the <audio>, stops playback
+        if not self._busy:
+            self.md_copilot.content = IDLE_TEXT
 
     def run(self) -> None:
         self.update()

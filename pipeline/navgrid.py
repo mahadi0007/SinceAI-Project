@@ -2,7 +2,7 @@
 
 Inputs: out/segment_points.npz, out/assets.json (from segment.py).
 Walkable = floor cells (dilated) minus obstacles inflated by the avatar radius.
-The target object is taken from config (navgrid.target_object) or auto-picked:
+The target object is taken from config (navgrid.target.point / object_id) or auto-picked:
 a floor-standing, pump-sized object reachable at the far end of the walk.
 mapping.py later forces the faulty asset (P-002) onto this object.
 """
@@ -20,7 +20,7 @@ import numpy as np
 from matplotlib.patches import Rectangle
 from scipy import ndimage
 
-from pipeline.common import load_config, out_path
+from pipeline.common import is_vision_label, load_config, out_path
 
 Cfg = dict[str, Any]
 Cell = tuple[int, int]   # (ix, iz)
@@ -246,24 +246,48 @@ def box_distance(obj: dict, x: float, z: float) -> float:
     return math.hypot(dx, dz)
 
 
-def pick_target(assets: list[dict], grid: Grid, dist: np.ndarray, nc: Cfg) -> tuple[dict, Cell]:
-    """Configured object, or the farthest reachable floor-standing pump-sized object."""
+def point_box_distance(a: dict, p: np.ndarray) -> float:
+    lo, hi = np.array(a["bbox_min"]), np.array(a["bbox_max"])
+    return float(np.linalg.norm(np.maximum(np.maximum(lo - p, p - hi), 0)))
+
+
+def pick_target(assets: list[dict], grid: Grid, dist: np.ndarray, nc: Cfg,
+                cfg: Cfg | None = None) -> tuple[dict, Cell]:
+    """Target object, in priority order:
+    1. target.point: a scene coordinate (stable across segmentation versions; OBJ ids are not) ->
+       the object whose box contains / is nearest to that point;
+    2. target.object_id (only valid for the segmentation version it was chosen on);
+    3. confidently VLM-labelled reachable objects (any supported vision provider);
+    4. geometry rule (floor-standing, pump-sized)."""
     tc = nc["target"]
     reach, by_label = tc["reach"], False
-    if tc["object_id"]:
+    objs = [a for a in assets if a["kind"] == "object"]
+    if tc.get("point") is not None:
+        # object with the most real segmented points near the coordinate (boxes of big clusters
+        # can contain the point without any of their points being there)
+        p = np.array(tc["point"], float)
+        d = np.load(out_path(cfg, "segment_points.npz"))
+        near_lab = d["labels"][np.linalg.norm(d["xyz"] - p, axis=1) <= tc.get("point_tol", 0.15)]
+        near_lab = near_lab[near_lab >= 0]
+        cands = []
+        if len(near_lab):
+            ids, cnt = np.unique(near_lab, return_counts=True)
+            best = assets[int(ids[cnt.argmax()])]
+            cands = [best] if best["kind"] == "object" else []
+            print(f"[target] point {p.tolist()} -> {best['id']} ({cnt.max()} of {len(near_lab)} nearby points)")
+    elif tc["object_id"]:
         cands = [a for a in assets if a["id"] == tc["object_id"]]
     else:
-        # prefer objects Gemini vision confidently labelled as the target's class; else geometry rule
-        cands = [a for a in assets if a.get("label") in tc["prefer_labels"]
-                 and a.get("label_source") == "gemini_vision" and "overhead" not in a["tags"]
-                 and a.get("label_confidence", 0) >= tc["prefer_min_conf"]
-                 and reachable_any(a, grid, dist, tc["label_reach"])]
+        cands = []
+    if not cands:
+        cands = [a for a in objs if is_vision_label(a, cfg or {}, tc["prefer_labels"], tc["prefer_min_conf"])
+                 and "overhead" not in a["tags"] and reachable_any(a, grid, dist, tc["label_reach"])]
         if cands:
             reach, by_label = tc["label_reach"], True
-            print(f"[target] {len(cands)} reachable objects labelled {tc['prefer_labels']}: "
+            print(f"[target] {len(cands)} reachable objects VLM-labelled {tc['prefer_labels']}: "
                   + ", ".join(f"{a['id']} ({a['label_confidence']})" for a in cands))
         else:
-            cands = [a for a in assets if a["kind"] == "object" and "overhead" not in a["tags"]
+            cands = [a for a in objs if "overhead" not in a["tags"]
                      and a["hint"] != "pipe segment" and a["n_points"] >= tc["min_points"]
                      and a["features"]["height_bottom"] <= tc["max_height_bottom"]
                      and max(a["extent"]) <= tc["max_extent"]]
@@ -314,6 +338,14 @@ def plot_grid(grid: Grid, floor: np.ndarray, obstacles: np.ndarray, inflated: np
 
 # ---------- main ----------
 
+def segmentation_version(cfg: Cfg) -> str:
+    """Short hash of the label array: OBJ ids are only meaningful within one segmentation version."""
+    import hashlib
+    d = np.load(out_path(cfg, "segment_points.npz"))
+    return hashlib.sha1(d["labels"].tobytes()).hexdigest()[:12]
+
+
+
 def run(cfg: Cfg) -> dict:
     nc, floor_y = cfg["navgrid"], cfg["scene"]["floor_y"]
     xyz, labels, assets = load_inputs(cfg)
@@ -327,7 +359,7 @@ def run(cfg: Cfg) -> dict:
 
     start = pick_start(walk, grid, nc)
     dist = dijkstra(walk, start)
-    target, goal = pick_target(assets, grid, dist, nc)
+    target, goal = pick_target(assets, grid, dist, nc, cfg)
     raw = astar(walk, start, goal)
     smooth = shortcut(walk, raw)
     xz = np.array([grid.center(*c) for c in smooth])
@@ -347,7 +379,8 @@ def run(cfg: Cfg) -> dict:
               "target_object": target["id"], "target_center": target["center"],
               "waypoints": [[round(x, 4), floor_y, round(z, 4)] for x, z in xz],
               "points": pts3.round(4).tolist(), "length": round(length, 3),
-              "min_clearance": round(min_clear, 4), "floor_fill": nc["floor_fill"]}
+              "min_clearance": round(min_clear, 4), "floor_fill": nc["floor_fill"],
+              "target_point": nc["target"].get("point"), "segmentation": segmentation_version(cfg)}
     with open(out_path(cfg, "path.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, indent=1)
     np.savez_compressed(out_path(cfg, "navgrid.npz"), walkable=walk, obstacles=obstacles,
