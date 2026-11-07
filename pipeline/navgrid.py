@@ -94,7 +94,7 @@ def inflate(obstacles: np.ndarray, radius: float, cell: float) -> tuple[np.ndarr
 
 
 def largest_component(mask: np.ndarray) -> np.ndarray:
-    lab, n = ndimage.label(mask, structure=np.ones((3, 3)))
+    lab, n = ndimage.label(mask)  # 4-connected, matching no-corner-cutting moves
     if n == 0:
         return mask
     sizes = ndimage.sum(mask, lab, range(1, n + 1))
@@ -107,6 +107,14 @@ def _step(d: tuple[int, int]) -> float:
     return math.sqrt(2.0) if d[0] and d[1] else 1.0
 
 
+def _move_ok(walk: np.ndarray, i: int, j: int, di: int, dj: int) -> bool:
+    """Target cell walkable and, for diagonal moves, no corner cutting (both side cells walkable)."""
+    a, b = i + di, j + dj
+    if not (0 <= a < walk.shape[0] and 0 <= b < walk.shape[1] and walk[a, b]):
+        return False
+    return not (di and dj) or (walk[a, j] and walk[i, b])
+
+
 def dijkstra(walk: np.ndarray, start: Cell) -> np.ndarray:
     dist = np.full(walk.shape, np.inf)
     dist[start] = 0.0
@@ -117,7 +125,7 @@ def dijkstra(walk: np.ndarray, start: Cell) -> np.ndarray:
             continue
         for di, dj in NEIGH:
             a, b = i + di, j + dj
-            if 0 <= a < walk.shape[0] and 0 <= b < walk.shape[1] and walk[a, b]:
+            if _move_ok(walk, i, j, di, dj):
                 nd = d + _step((di, dj))
                 if nd < dist[a, b]:
                     dist[a, b] = nd
@@ -143,7 +151,7 @@ def astar(walk: np.ndarray, start: Cell, goal: Cell) -> list[Cell]:
             return path[::-1]
         for di, dj in NEIGH:
             nb = (cur[0] + di, cur[1] + dj)
-            if 0 <= nb[0] < walk.shape[0] and 0 <= nb[1] < walk.shape[1] and walk[nb]:
+            if _move_ok(walk, cur[0], cur[1], di, dj):
                 ng = g[cur] + _step((di, dj))
                 if ng < g.get(nb, math.inf):
                     g[nb], came[nb] = ng, cur
@@ -151,24 +159,28 @@ def astar(walk: np.ndarray, start: Cell, goal: Cell) -> list[Cell]:
     raise RuntimeError(f"A*: no path from {start} to {goal}")
 
 
-def bresenham(a: Cell, b: Cell) -> list[Cell]:
-    (x0, y0), (x1, y1) = a, b
-    dx, dy = abs(x1 - x0), -abs(y1 - y0)
-    sx, sy = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1)
-    err, out = dx + dy, []
-    while True:
-        out.append((x0, y0))
-        if (x0, y0) == (x1, y1):
-            return out
-        e2 = 2 * err
-        if e2 >= dy:
-            err += dy; x0 += sx
-        if e2 <= dx:
-            err += dx; y0 += sy
-
-
 def line_free(walk: np.ndarray, a: Cell, b: Cell) -> bool:
-    return all(walk[c] for c in bresenham(a, b))
+    """Exact supercover: every cell the segment between cell centres touches is walkable;
+    passing exactly through a cell corner needs both side cells walkable (as A* requires)."""
+    nx, nz = abs(b[0] - a[0]), abs(b[1] - a[1])
+    sx, sz = (b[0] > a[0]) - (b[0] < a[0]), (b[1] > a[1]) - (b[1] < a[1])
+    x, z = a
+    ix = iz = 0
+    if not walk[x, z]:
+        return False
+    while ix < nx or iz < nz:
+        d = (2 * ix + 1) * nz - (2 * iz + 1) * nx    # next x-crossing vs next z-crossing
+        if d == 0:
+            if not (walk[x + sx, z] and walk[x, z + sz]):
+                return False
+            x, z, ix, iz = x + sx, z + sz, ix + 1, iz + 1
+        elif d < 0:
+            x, ix = x + sx, ix + 1
+        else:
+            z, iz = z + sz, iz + 1
+        if not walk[x, z]:
+            return False
+    return True
 
 
 def shortcut(walk: np.ndarray, path: list[Cell]) -> list[Cell]:
