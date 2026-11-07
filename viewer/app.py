@@ -319,17 +319,9 @@ class Sim:
         self.h_rep = sc.add_line_segments("/repaired_boxes", np.concatenate(segs_r) if segs_r else np.zeros((0, 2, 3), np.float32),
                                           np.concatenate(cols_r) if cols_r else np.zeros((0, 2, 3), np.uint8),
                                           thickness=3.0, thickness_units="screen", visible=False)
-        lift = np.array([0, -self.vc["path_lift"], 0])                # up = -y
-        p = self.pts + lift
         self.draw_path()
         self.h_tour_markers: list[Any] = []
-        for k, st in enumerate(self.stops, 1):              # numbered tour stop markers on the floor
-            q = p[min(st["sample_index"], len(p) - 1)]
-            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
-            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
-            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
-                                                    position=(q[0], q[1] - 0.12, q[2]),
-                                                    anchor="bottom-center", font_screen_scale=0.8))
+        self.draw_tour_markers()
         t = self.target
         sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
@@ -430,6 +422,8 @@ class Sim:
         tabs = g.add_tab_group()
         with tabs.add_tab("Equipment", icon="tool"):
             self._build_equipment_tab(g)
+        with tabs.add_tab("Ask the MCP", icon="messages"):
+            self._build_chat_gui(g)
         with tabs.add_tab("Inspection tour", icon="route"):
             self._build_tour_tab(g)
         with tabs.add_tab("More", icon="settings"):
@@ -457,7 +451,7 @@ class Sim:
                                        hint="Sorted by condition: most urgent first. Clicking equipment in the "
                                             "3D view selects it here too.")
         b_walk = g.add_button("Walk to equipment", color="blue", icon="walk")
-        self.b_ask = g.add_button("Ask a question", color="green", icon="message-chatbot")
+        self.b_ask = g.add_button("Ask what you want to know", color="green", icon="message-chatbot")
         self.md_walk = g.add_markdown("")
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
@@ -558,7 +552,7 @@ class Sim:
     def answer_header(d: dict) -> str:
         src = d.get("meta", {}).get("source", "")
         if src.startswith("template_fallback"):
-            return "📋 _Built from the Excel evidence (no AI call). **Ask a question** for an AI answer._\n\n"
+            return "📋 _Built from the Excel evidence (no AI call). **Ask what you want to know** for an AI answer._\n\n"
         return f"🤖 _AI answer · {src}_\n\n"
 
     def open_question_dialog(self, client: Any) -> None:
@@ -666,7 +660,7 @@ class Sim:
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             b_fly = g.add_button("Fly to object")
             b_walk_click = g.add_button("Walk to this object")
-            self.b_identify = g.add_button("Ask vision model what this is (paid)")
+            self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Boundary repair: before / after", expand_by_default=False):
             g.add_markdown(f"After (white frames): **{len(self.nodes)}** objects · **{self.n_ctx}** context repairs "
@@ -942,7 +936,7 @@ class Sim:
         self.md_loading.content = text
         self.pb.value = frac
         self.b_ask.disabled = on
-        self.b_ask.label = "Copilot is working…" if on else "Ask a question"
+        self.b_ask.label = "Copilot is working…" if on else "Ask what you want to know"
 
     def run_job(self, tag: str, question: str | None, on_done: Any, allow_paid: bool = True) -> None:
         """Run diagnose() in a thread; show progress bar + elapsed seconds until it returns."""
@@ -992,7 +986,7 @@ class Sim:
                 print(f"[viewer] briefing failed: {type(e).__name__}: {e}")
                 if self.arrived:
                     self.md_copilot.content = (self.arrival_header() + "⚠️ _Briefing failed; use "
-                                               "**Ask copilot** below._")
+                                               "**Ask what you want to know** below._")
                 return
             finally:
                 self._prefetching = False
@@ -1036,8 +1030,10 @@ class Sim:
         print(f"[viewer] http://localhost:{self.vc['port']}  ({len(self.nodes)} objects, "
               f"path {self.s[-1]:.2f} u)")
         dt = 1.0 / self.vc["fps"]
+        self._init_remote()
         while True:
             now = time.time()
+            self.poll_remote(now)
             if self.playing and now < self.pause_until and self.stop_active is not None:
                 self.blink_stop(now)                                   # pausing at a stop
             elif self.playing and self.stop_active is not None and self.stop_active["kind"] != "target":
@@ -1062,7 +1058,7 @@ class Sim:
         self.highlight_stop(st)
         if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
             self.md_walk.content = (f"✅ **Arrived at {stop_title(st)}**" + (
-                "  \nIts data is below; **Ask a question** for more." if st["has_asset"]
+                "  \nIts data is below; **Ask what you want to know** for more." if st["has_asset"]
                 else "  \n_No asset record: this object is not in the Excel pack._"))
             return
         self.md_stop.content = stop_text(st, k + 1, len(self.stops))
@@ -1070,6 +1066,174 @@ class Sim:
             self.pause_until = time.time() + float(self.tour["pause_s"])
 
     # --- routes: inspection tour vs. go to one equipment ---
+    def _build_chat_gui(self, g: Any) -> None:
+        """Chat: quick commands (instant, free) -> Claude Code headless with our MCP tools."""
+        with g.add_folder("Ask the MCP"):
+            self.tx_chat = g.add_text("Question", "Which assets need attention?")
+            b_chat = g.add_button("Ask", color="violet")
+            self.md_chat_status = g.add_markdown("", visible=False)
+            self.md_claude = g.add_markdown("_Checking Claude Code…_")
+            self.md_chat = g.add_markdown("_Type a question or a command (e.g. `take me to M-006`, `start tour`), "
+                                          "then press **Ask**. Type `help` for the quick commands._")
+        self._chat_busy = False
+
+        def check() -> None:                          # free login check, in the background
+            from copilot.chat import claude_status
+            st = claude_status(self.cfg["chat"])
+            self.cfg["chat"]["_status"] = st
+            self.md_claude.content = st["message"]
+        threading.Thread(target=check, daemon=True).start()
+
+        @b_chat.on_click
+        def _(_e: Any) -> None:
+            q = self.tx_chat.value.strip()
+            if q and not self._chat_busy:
+                threading.Thread(target=self.chat, args=(q,), daemon=True).start()
+
+    def chat_act(self, cmd: str, target: str) -> str:
+        """Viewer actions for quick commands (same handlers as the MCP remote commands)."""
+        if cmd == "tour":
+            res = self.handle_command({"cmd": "tour", "stops": [t for t in target.split(",") if t]})
+        else:
+            res = self.handle_command({"cmd": cmd, "target": target})
+        return ("" if res.get("ok") else "⚠️ ") + res.get("message", "")
+
+    def chat(self, question: str) -> None:
+        from copilot.chat import answer, parse_quick
+        self._chat_busy = True
+        labels = sorted({n["label"] for n in self.nodes})
+        quick = self.cfg["chat"].get("quick_commands", True) and parse_quick(question, labels) is not None
+        t0 = time.time()
+
+        def tick() -> None:
+            while self._chat_busy:
+                self.md_chat_status.content = (f"⏳ **Claude is working** (copilot tools via MCP) · "
+                                               f"{time.time() - t0:.0f} s")
+                time.sleep(0.5)
+
+        self.md_chat_status.visible = not quick
+        if not quick:
+            threading.Thread(target=tick, daemon=True).start()
+        try:
+            text, route = answer(question, self.cfg["chat"], self.chat_act)
+        except Exception as e:  # noqa: BLE001 - chat must never break the viewer
+            text, route = f"⚠️ {type(e).__name__}: {e}", "error"
+        finally:
+            self._chat_busy = False
+            self.md_chat_status.visible = False
+        badge = "⚡ quick command" if route == "quick" else f"🤖 Claude · {time.time() - t0:.0f} s"
+        self.md_chat.content = f"> **You:** {question}\n\n{text}\n\n_{badge}_"
+
+    def draw_tour_markers(self) -> None:
+        """Numbered floor markers for the current tour stops (replaces any previous markers)."""
+        for h in self.h_tour_markers:
+            h.remove()
+        self.h_tour_markers = []
+        p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
+        sc = self.server.scene
+        for k, st in enumerate(self.stops, 1):
+            q = p[min(st["sample_index"], len(p) - 1)]
+            col = (220, 30, 30) if st["kind"] == "target" else (255, 150, 0)
+            self.h_tour_markers.append(sc.add_icosphere(f"/tour/stop_{k}", radius=0.07, color=col, position=tuple(q)))
+            self.h_tour_markers.append(sc.add_label(f"/tour/label_{k}", f"{k}. {st['tag']}",
+                                                    position=(q[0], q[1] - 0.12, q[2]),
+                                                    anchor="bottom-center", font_screen_scale=0.8))
+
+    # --- remote control (MCP server -> out/viewer_cmd.jsonl -> here) ---
+    def _init_remote(self) -> None:
+        self.cmd_path = out_path(self.cfg, "viewer_cmd.jsonl")
+        self.cmd_offset = self.cmd_path.stat().st_size if self.cmd_path.exists() else 0   # ignore old commands
+        self.next_poll = 0.0
+
+    def poll_remote(self, now: float) -> None:
+        """Heartbeat + execute new commands (show / walk / tour) written by copilot.tools."""
+        if now < self.next_poll:
+            return
+        self.next_poll = now + self.vc.get("remote_poll_s", 0.5)
+        out_path(self.cfg, "viewer_heartbeat").write_text(str(now), encoding="utf-8")
+        if not self.cmd_path.exists() or self.cmd_path.stat().st_size <= self.cmd_offset:
+            return
+        with open(self.cmd_path, encoding="utf-8") as f:
+            f.seek(self.cmd_offset)
+            lines = f.read().splitlines()
+            self.cmd_offset = f.tell()
+        for line in lines:
+            try:
+                c = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                res = self.handle_command(c)
+            except Exception as e:  # noqa: BLE001 - a bad command must never stop the viewer
+                res = {"ok": False, "message": f"{type(e).__name__}: {e}"}
+            with open(out_path(self.cfg, "viewer_cmd_results.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"id": c.get("id"), **res}) + "\n")
+
+    def find_node(self, key: str) -> dict | None:
+        k = str(key).strip().upper()
+        for n in self.nodes:
+            a = n.get("asset")
+            if n["id"].upper() == k or (a and k in (a["tag"].upper(), a["asset_id"].upper())):
+                return n
+        return None
+
+    def nearest_by_label(self, query: str, reachable: bool) -> tuple[dict | None, str]:
+        """Object whose vision label matches `query` (e.g. 'tank' -> 'tank/vessel'): the reachable one with the
+        shortest walk from the worker (reachable=True) or the most confident one (False)."""
+        from copilot.tools import label_matches
+        cands = sorted((n for n in self.nodes if label_matches(n["label"], query)),
+                       key=lambda n: -(n.get("label_confidence") or 0))[: self.vc.get("label_candidates", 10)]
+        if not cands:
+            return None, f"No asset or detected object called '{query}'."
+        if not reachable:
+            return cands[0], f"{len(cands)} '{cands[0]['label']}' object(s); showing the most confident."
+        if self.planner is None:
+            from pipeline.tour import WalkPlanner
+            self.planner = WalkPlanner(self.cfg)
+        p, best = self.position(), None
+        for n in cands:
+            plan = self.planner.to_object(float(p[0]), float(p[2]), n)
+            if plan["ok"] and (best is None or plan["length"] < best[1]):
+                best = (n, plan["length"])
+        if best is None:
+            return None, f"None of the {len(cands)} '{cands[0]['label']}' objects is reachable from here."
+        return best[0], f"nearest reachable of {len(cands)} '{best[0]['label']}' object(s)"
+
+    def handle_command(self, c: dict) -> dict:
+        cmd = c.get("cmd")
+        if cmd in ("show", "walk"):
+            n, why = self.find_node(c.get("target", "")), ""
+            if n is None:                                    # not a tag / id: try a vision label ("tank")
+                n, why = self.nearest_by_label(c.get("target", ""), reachable=cmd == "walk")
+                if n is None:
+                    return {"ok": False, "message": why}
+            name = n["asset"]["tag"] if n.get("asset") else f"{n['id']} ({n['label']})"
+            if cmd == "show":
+                self.select(n)
+                for client in self.server.get_clients().values():
+                    self.fly_to(n, client)
+                return {"ok": True, "message": f"Showing {name} in the viewer (selected, camera moved)"
+                                               + (f"; {why.rstrip('.')}." if why else ".")}
+            self.go_to(n)
+            msg = self.md_walk.content.replace("**", "").replace("⚠️ ", "").replace("🚶 ", "")
+            if why and self.playing:
+                msg = msg.split("  \n")[0] + f" ({why})."
+                self.md_walk.content += f"  \n_{why}_"
+            return {"ok": self.playing, "message": msg}
+        if cmd == "tour":
+            from pipeline.tour import plan_tour
+            t = plan_tour(self.cfg, list(c.get("stops") or []))
+            self.tour, self.tour_route = t, (np.asarray(t["points"], np.float64), t["stops"])
+            self.walk_mode = "goto"                       # force set_walk_mode to rebuild the tour route
+            self.set_walk_mode("tour")
+            self.draw_tour_markers()
+            self.playing = True
+            route = " → ".join(["door"] + [s["tag"] for s in t["stops"]])
+            skipped = "; ".join(f"{s['tag']}: {s['reason']}" for s in t["skipped"]) or "none"
+            return {"ok": True, "message": f"Tour started ({t['mode']}): {route}, "
+                                           f"{t['length'] * self.cfg['scene']['units_to_m']:.1f} m. Skipped: {skipped}"}
+        return {"ok": False, "message": f"Unknown command '{cmd}'."}
+
     def draw_path(self) -> None:
         p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
         self.h_path = self.server.scene.add_line_segments(
