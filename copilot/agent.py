@@ -181,7 +181,7 @@ def diagnose(key: str, question: str | None = None, cfg: Cfg | None = None, allo
                          "sources": describe_ids(pack, d["citation_check"]["cited_ids"])}
             return d
         if not allow_paid:
-            raise LLMUnavailable("automatic call: paid requests disabled (press 'Ask copilot')")
+            raise LLMUnavailable("automatic call: paid requests disabled (press 'Ask what you want to know')")
         raw, model = call_llm(system_prompt(pack), user_prompt(pack, question), cfg["copilot"])
         cp.write_text(json.dumps({"raw": raw, "model": model, "at": time.strftime("%Y-%m-%d %H:%M")}),
                       encoding="utf-8")

@@ -483,7 +483,7 @@ class Sim:
             self.md_sel = g.add_markdown("_Click any object in the 3D view to inspect it._")
             self.img_sel = g.add_image(np.full((8, 24, 3), 235, np.uint8), visible=False)
             b_fly = g.add_button("Fly to object", visible=True)
-            self.b_identify = g.add_button("Ask vision model what this is (paid)")
+            self.b_identify = g.add_button("Ask the AI to know this", hint="Uses 1 paid request from the team's AI budget")
             self.md_identify = g.add_markdown("")
         with g.add_folder("Inspection tour"):
             if self.tour:
@@ -525,7 +525,7 @@ class Sim:
             tags = sorted(n["asset"]["tag"] for n in self.nodes if n["asset"])
             self.dd_asset = g.add_dropdown("Asset", tags, initial_value=self.target["asset"]["tag"])
             self.tx_question = g.add_text("Question", "Why is this asset flagged and what should I check first?")
-            self.b_ask = g.add_button("Ask copilot", color="blue")
+            self.b_ask = g.add_button("Ask what you want to know", color="blue")
             self.md_loading = g.add_markdown("", visible=False)
             self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="blue")
             self.h_audio = g.add_html("", visible=False)          # spoken briefing player
@@ -679,7 +679,7 @@ class Sim:
         self.md_loading.content = text
         self.pb.value = frac
         self.b_ask.disabled = on
-        self.b_ask.label = "Copilot is working…" if on else "Ask copilot"
+        self.b_ask.label = "Copilot is working…" if on else "Ask what you want to know"
 
     def run_job(self, tag: str, question: str | None, on_done: Any, allow_paid: bool = True) -> None:
         """Run diagnose() in a thread; show progress bar + elapsed seconds until it returns."""
@@ -729,7 +729,7 @@ class Sim:
                 print(f"[viewer] briefing failed: {type(e).__name__}: {e}")
                 if self.arrived:
                     self.md_copilot.content = (self.arrival_header() + "⚠️ _Briefing failed; use "
-                                               "**Ask copilot** below._")
+                                               "**Ask what you want to know** below._")
                 return
             finally:
                 self._prefetching = False
@@ -801,7 +801,7 @@ class Sim:
         self.highlight_stop(st)
         if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
             self.md_goto.content = (f"✅ **Arrived at {stop_title(st)}**" + (
-                "  \nPress **Ask copilot** (Copilot panel) for a grounded diagnosis of this asset."
+                "  \nPress **Ask what you want to know** (Copilot panel) for a grounded diagnosis of this asset."
                 if st["has_asset"] else "  \n_No asset record: this object is not in the Excel pack._"))
             if st["has_asset"]:
                 self.dd_asset.value = st["tag"]
