@@ -73,9 +73,10 @@ def _reading_rows(telemetry: list[dict]) -> list[str]:
     return rows
 
 
-def asset_card(pack: dict, today: date | None = None, compact: bool = False) -> str:
+def asset_card(pack: dict, today: date | None = None, compact: bool = False, hero: bool = True) -> str:
     """Summary card. compact=True: top readings, one-line events/maintenance, no reference (the viewer
-    shows the full tables from asset_details() in collapsible sections below it)."""
+    shows the full tables from asset_details() in collapsible sections below it). hero=False: no title/status
+    header (the viewer draws that as its own status card), starting at the readings."""
     a, s, ev = pack["asset"], pack["current_state"], pack["events"]
     today = today or date.today()
     dot, state = STATUS.get(s["condition_state"], ("⚪", _words(s["condition_state"])))
@@ -87,15 +88,17 @@ def asset_card(pack: dict, today: date | None = None, compact: bool = False) -> 
           f"| **{s['health_score']}**/100 | {state} | {URGENCY.get(s['urgency'], _words(s['urgency']))} |",
           "",
           f"**{_words(s['issue_code'])}**: {s['issue_summary']}"]
+    if not hero:
+        md = []
 
     if pack.get("telemetry"):
-        md += ["", "#### 📈 Readings · last 3 days", "| Reading | Then → now | Trend | Healthy peers |",
+        md += ["", "#### Readings · last 3 days", "| Reading | Then → now | Trend | Healthy peers |",
                "|---|---|---|---|", *_reading_rows(pack["telemetry"])[:3 if compact else None],
                "", "_⚠️ = now more than 10% away from healthy equipment of the same type._"]
 
     counts = sorted(ev.get("counts_by_code", {}).items(), key=lambda kv: -kv[1])
     if counts:
-        md += ["", f"#### 🔔 Alarms & events · {ev.get('total', sum(c for _, c in counts))} in the log",
+        md += ["", f"#### Alarms & events · {ev.get('total', sum(c for _, c in counts))} in the log",
                " · ".join(f"**{c}** {_words(k).lower()}" for k, c in counts)]
         recent = sorted(ev.get("issue_code_events", []) + ev.get("other_important_events", []),
                         key=lambda e: str(e["timestamp"]), reverse=True)[:3]
@@ -104,7 +107,7 @@ def asset_card(pack: dict, today: date | None = None, compact: bool = False) -> 
             md += [f"| {_stamp(e['timestamp'])} | {_words(e['event_code'])} ({_words(e['event_type']).lower()}) | "
                    f"{_words(e['severity'])} | {_words(e['status'])} |" for e in recent]
 
-    md += ["", "#### 🔧 Maintenance"]
+    md += ["", "#### Maintenance"]
     last = _dt(a.get("last_service_date"))
     if last and a.get("service_interval_days"):
         due = (last + timedelta(days=int(a["service_interval_days"]))).date()
@@ -117,7 +120,7 @@ def asset_card(pack: dict, today: date | None = None, compact: bool = False) -> 
         md += [f"| {_day(w['opened_at'])} | {_words(w['action'])} ({w['maintenance_type']}) | "
                f"{_words(w['result'])} | {w.get('downtime_h', 0):g} h |" for w in wos]
 
-    md += ["", "#### ✅ What to check", f"1. **{_words(s['recommended_next_check'])}** (recommended for this issue)"]
+    md += ["", "#### What to check", f"1. **{_words(s['recommended_next_check'])}** (recommended for this issue)"]
     seen = {s["recommended_next_check"].lower()}
     for c in pack.get("cases", []):
         chk = c["recommended_next_check"]
@@ -135,7 +138,7 @@ def asset_card(pack: dict, today: date | None = None, compact: bool = False) -> 
         ref.append(f"📍 3D: {sc['object_id']} · {_words(sc['mapping_method']).lower()} · "
                    f"mapping confidence {float(sc['mapping_confidence']):.2f}")
     if ref and not compact:
-        md += ["", "#### 📚 Reference", "  \n".join(ref)]
+        md += ["", "#### Reference", "  \n".join(ref)]
     if compact:
         md += ["", "_Full tables below: asset details, all readings, every event, maintenance history, "
                    "past cases, documents, data quality, 3D mapping._"]
