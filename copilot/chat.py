@@ -97,11 +97,42 @@ def find_claude(cc: Cfg) -> str | None:
     return hits[-1] if hits else None
 
 
-def ask_claude(question: str, cc: Cfg) -> str:
+SETUP_HELP = ("**To enable Claude answers on this computer:** install Claude Code (https://claude.com/claude-code, "
+              "or the Claude Code extension in VS Code / Antigravity), then log in once: open a terminal, run "
+              "`claude`, type `/login` and sign in with a Claude Pro/Max account. Restart the viewer afterwards. "
+              "If Claude Code is installed somewhere unusual, set `chat.claude_path` in config.yaml.")
+
+
+def claude_status(cc: Cfg) -> dict:
+    """Free check (no AI request): is Claude Code installed and logged in, and how (subscription vs API key)?"""
     exe = find_claude(cc)
     if not exe:
-        return ("⚠️ Claude Code was not found on this machine. Quick commands still work; type `help`. "
-                "Set `chat.claude_path` in config.yaml to the claude executable.")
+        return {"ready": False, "installed": False,
+                "message": "⚠️ **Claude Code is not installed** on this computer: only quick commands work "
+                           "(type `help`).  \n" + SETUP_HELP}
+    try:
+        p = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        st = json.loads(p.stdout)
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as e:
+        return {"ready": True, "installed": True, "path": exe,
+                "message": f"🤖 Claude Code found (login status unknown: {type(e).__name__})."}
+    if not st.get("loggedIn"):
+        return {"ready": False, "installed": True, "path": exe,
+                "message": "⚠️ **Claude Code is installed but not logged in**: only quick commands work "
+                           "(type `help`).  \n" + SETUP_HELP}
+    method = st.get("authMethod", "?")
+    billed = method not in ("claude.ai",)
+    note = ("⚠️ logged in with an **API key**: each Claude question is billed per use."
+            if billed else "logged in with a Claude subscription (no extra cost, plan usage limits apply).")
+    return {"ready": True, "installed": True, "path": exe, "auth_method": method,
+            "message": f"🤖 **Claude ready**: {note}"}
+
+
+def ask_claude(question: str, cc: Cfg) -> str:
+    st = cc.get("_status") or claude_status(cc)
+    if not st["ready"]:
+        return st["message"]
+    exe = st["path"]
     cmd = [exe, "-p", question, "--mcp-config", str(ROOT / ".mcp.json"), "--strict-mcp-config",
            "--allowedTools", "mcp__valmet-copilot", "--output-format", "json",
            "--append-system-prompt", cc["system_prompt"]]
@@ -117,7 +148,10 @@ def ask_claude(question: str, cc: Cfg) -> str:
     except json.JSONDecodeError:
         return f"⚠️ Claude Code failed: {(p.stderr or p.stdout)[:300]}"
     if d.get("is_error"):
-        return f"⚠️ Claude Code error: {str(d.get('result'))[:300]}"
+        res = str(d.get("result"))
+        if "login" in res.lower() or "logged in" in res.lower() or "api key" in res.lower():
+            return "⚠️ **Claude Code is not logged in** on this computer: only quick commands work.  \n" + SETUP_HELP
+        return f"⚠️ Claude Code error: {res[:300]}"
     return f"{d.get('result', '').strip()}\n\n_Claude via MCP · {d.get('num_turns')} turns_"
 
 

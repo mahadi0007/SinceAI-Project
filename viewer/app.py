@@ -817,9 +817,17 @@ class Sim:
             self.tx_chat = g.add_text("Question", "Which assets need attention?")
             b_chat = g.add_button("Ask", color="violet")
             self.md_chat_status = g.add_markdown("", visible=False)
+            self.md_claude = g.add_markdown("_Checking Claude Code…_")
             self.md_chat = g.add_markdown("_Type a question or a command (e.g. `take me to M-006`, `start tour`), "
                                           "then press **Ask**. Type `help` for the quick commands._")
         self._chat_busy = False
+
+        def check() -> None:                          # free login check, in the background
+            from copilot.chat import claude_status
+            st = claude_status(self.cfg["chat"])
+            self.cfg["chat"]["_status"] = st
+            self.md_claude.content = st["message"]
+        threading.Thread(target=check, daemon=True).start()
 
         @b_chat.on_click
         def _(_e: Any) -> None:

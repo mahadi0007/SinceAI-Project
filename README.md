@@ -80,3 +80,21 @@ The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id 
   *"Plan a tour past CV-003 and M-006."*
 - Safety and cost: data tools are read-only, work orders are drafts, no physical control; only
   `diagnose(allow_paid=true)` can spend a request from the team's paid budget.
+
+## Viewer chat ("Ask the copilot")
+
+The viewer panel has a chat box. It works on every computer, with or without Claude:
+
+| Question type | Who answers | Needs |
+|---|---|---|
+| Quick commands: `take me to M-006`, `show P-005`, `start tour`, `tour past CV-003 and M-006`, `which assets need attention`, `status of P-002`, `help` | the viewer itself, instantly | nothing (free) |
+| Anything else, e.g. *"take me to the motor that is overheating and tell me why"* | Claude Code in the background, using only our MCP tools (it can also move the worker / camera) | Claude Code installed and logged in |
+
+The chat panel shows the Claude status when the viewer starts:
+- **🤖 Claude ready (subscription)**: free-form questions work; they use your own Claude Pro/Max plan (no extra cost).
+- **⚠️ API key**: works, but each Claude question is billed per use.
+- **⚠️ Not installed / not logged in**: only quick commands work. To enable: install Claude Code
+  (https://claude.com/claude-code or the VS Code / Antigravity extension), run `claude` in a terminal, type `/login`,
+  then restart the viewer. If it is installed in an unusual place, set `chat.claude_path` in `config.yaml`.
+
+Claude never spends the team's paid Featherless budget unless you explicitly ask for a fresh paid diagnosis.
