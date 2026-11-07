@@ -345,31 +345,64 @@ def sam_prompts(prop: dict, v: int, expand: float) -> list[dict]:
     return out
 
 
-def run_sam(image: np.ndarray, prompts: list[dict], name: str) -> list[tuple[np.ndarray, float]]:
-    """SAM on ONE immutable clean image: the embedding is computed once and reused for every prompt.
-    Returns (mask, iou score) per prompt."""
+_emb_cache: dict[tuple[str, str], tuple[Any, Any]] = {}
+EMB_CACHE_MAX = 8
+
+
+def image_sha(image: np.ndarray) -> str:
+    a = np.ascontiguousarray(image)
+    return hashlib.sha256(a.tobytes() + str(a.shape).encode()).hexdigest()[:20]
+
+
+def sam_embedding(image: np.ndarray, name: str, cache: bool = True) -> tuple[Any, Any, Image.Image]:
+    """(embedding, processor output with original_sizes, PIL copy) for ONE clean image. Cached by
+    (model, image content hash), so repeated prompts on the same render never re-encode it."""
     import torch
     proc, model = sam_model(name)
     img = Image.fromarray(np.array(image, copy=True))
+    key = (name, image_sha(image))
+    if cache and key in _emb_cache:
+        emb, base = _emb_cache[key]
+        return emb, base, img
     base = proc(images=img, return_tensors="pt")
     with torch.no_grad():
         emb = model.get_image_embeddings(base["pixel_values"])
-    res = []
-    for p in prompts:
-        kw: dict[str, Any] = {"images": img, "input_boxes": [[p["box"]]], "return_tensors": "pt"}
-        if p["pts"]:
-            kw["input_points"] = [[p["pts"]]]
-            kw["input_labels"] = [[p["lbl"]]]
-        inp = proc(**kw)
-        inp.pop("pixel_values", None)
-        with torch.no_grad():
-            out = model(image_embeddings=emb, multimask_output=True,
-                        **{k: v for k, v in inp.items() if k in ("input_points", "input_labels", "input_boxes")})
-        m = proc.post_process_masks(out.pred_masks, base["original_sizes"])[0][0].numpy()
-        s = out.iou_scores[0, 0].numpy()
-        k = int(s.argmax())
-        res.append((m[k].astype(bool), float(s[k])))
-    return res
+    if cache:
+        if len(_emb_cache) >= EMB_CACHE_MAX:
+            _emb_cache.pop(next(iter(_emb_cache)))
+        _emb_cache[key] = (emb, base)
+    return emb, base, img
+
+
+def sam_predict(emb: Any, base: Any, img: Image.Image, prompt: dict, name: str) -> tuple[np.ndarray, float]:
+    """One prompt = optional box [x0,y0,x1,y1] + points/labels (1 include, 0 exclude), all in ORIGINAL image
+    pixel coordinates (the processor rescales them). Returns the best-IoU mask of the multimask output."""
+    import torch
+    proc, model = sam_model(name)
+    kw: dict[str, Any] = {"images": img, "return_tensors": "pt"}
+    if prompt.get("box") is not None:
+        kw["input_boxes"] = [[list(map(float, prompt["box"]))]]
+    if prompt.get("pts"):
+        kw["input_points"] = [[[list(map(float, p)) for p in prompt["pts"]]]]
+        kw["input_labels"] = [[list(map(int, prompt["lbl"]))]]
+    if "input_boxes" not in kw and "input_points" not in kw:
+        raise ValueError("SAM prompt needs a box or at least one point")
+    inp = proc(**kw)
+    inp.pop("pixel_values", None)
+    with torch.no_grad():
+        out = model(image_embeddings=emb, multimask_output=True,
+                    **{k: v for k, v in inp.items() if k in ("input_points", "input_labels", "input_boxes")})
+    m = proc.post_process_masks(out.pred_masks, base["original_sizes"])[0][0].numpy()
+    s = out.iou_scores[0, 0].numpy()
+    k = int(s.argmax())
+    return m[k].astype(bool), float(s[k])
+
+
+def run_sam(image: np.ndarray, prompts: list[dict], name: str, cache: bool = False) -> list[tuple[np.ndarray, float]]:
+    """SAM on ONE immutable clean image: the embedding is computed once and reused for every prompt.
+    Returns (mask, iou score) per prompt."""
+    emb, base, img = sam_embedding(image, name, cache=cache)
+    return [sam_predict(emb, base, img, p, name) for p in prompts]
 
 
 def sam_masks(rid: str, renderer: str, cfg: Cfg, prop: dict) -> dict:
@@ -408,6 +441,45 @@ def sam_masks(rid: str, renderer: str, cfg: Cfg, prop: dict) -> dict:
 
 # ---------- association (weighted visible support) ----------
 
+def view_support(xyz: np.ndarray, g_vox: np.ndarray, nvox: int, cam: Camera, buf: dict, mask: np.ndarray,
+                 pc: Cfg) -> tuple[np.ndarray, np.ndarray, dict] | None:
+    """Visible 2D->3D support of ONE mask in ONE calibrated view (shared by automatic association and manual
+    correction). pos/neg per voxel = summed contribution weights (EWA: alpha * transmittance, so occluded
+    Gaussians add ~0) of its Gaussians inside / outside the mask. Mask pixels deeper than
+    front + max(depth_gate_min, depth_gate_size * size) are treated as background seen through gaps.
+    Returns None for an empty mask."""
+    m = np.asarray(mask, bool)
+    if m.shape != (cam.H, cam.W):
+        raise ValueError(f"mask shape {m.shape} != view size {(cam.H, cam.W)}")
+    dm = buf["depth"][m]
+    dm = dm[np.isfinite(dm)]
+    if not len(dm):
+        return None
+    mf = m.ravel()
+    fp, fg, fw = buf["frag_pix"], buf["frag_gid"], buf["frag_w"]
+    fz = (xyz[fg] - cam.C) @ cam.R[2]
+    inm = mf[fp]
+    front = float(np.percentile(dm, 10))
+    ys, xs = np.nonzero(m)
+    size = max(np.ptp(xs), np.ptp(ys)) * front / cam.fx
+    gate = front + max(pc["depth_gate_min"], pc["depth_gate_size"] * size)
+    vox = g_vox[fg]
+    ok = vox >= 0
+    pin = ok & inm & (fz <= gate)
+    nout = ok & ~inm
+    pos = np.bincount(vox[pin], weights=fw[pin], minlength=nvox).astype(np.float32)
+    neg = np.bincount(vox[nout], weights=fw[nout], minlength=nvox).astype(np.float32)
+    return pos, neg, {"mask_px": int(mf.sum()), "w_in": round(float(fw[pin].sum()), 1),
+                      "w_gated": round(float(fw[ok & inm & (fz > gate)].sum()), 1), "gate": round(gate, 3)}
+
+
+def view_visibility(g_vox: np.ndarray, nvox: int, buf: dict) -> np.ndarray:
+    """Summed visible contribution weight per voxel in one view (0 = occluded or out of frame)."""
+    vox = g_vox[buf["frag_gid"]]
+    ok = vox >= 0
+    return np.bincount(vox[ok], weights=buf["frag_w"][ok], minlength=nvox).astype(np.float32)
+
+
 def associate(sc: Scene, rid: str, renderer: str, cfg: Cfg, prop: dict) -> dict:
     """pos/neg per voxel = summed contribution weights of its Gaussians inside / outside each mask.
     EWA weights are alpha*transmittance, so occluded Gaussians contribute ~0; disc weights are 1 for the
@@ -432,26 +504,13 @@ def associate(sc: Scene, rid: str, renderer: str, cfg: Cfg, prop: dict) -> dict:
             s = next((x["score"] for x in sm["scores"].get(c["cid"], []) if x["view"] == v), 0)
             if k not in M.files or s < pc["min_sam_score"]:
                 continue
-            m = M[k].ravel()
-            fp, fg, fw = b["frag_pix"], b["frag_gid"], b["frag_w"]
-            fz = (sc.xyz[fg] - cam.C) @ cam.R[2]
-            inm = m[fp]
-            dm = b["depth"].ravel()[m]
-            dm = dm[np.isfinite(dm)]
-            if not len(dm):
+            res = view_support(sc.xyz, sc.g_vox, nvox, cam, b, M[k], pc)
+            if res is None:
                 continue
-            front = float(np.percentile(dm, 10))
-            ys, xs = np.nonzero(M[k])
-            size = max(np.ptp(xs), np.ptp(ys)) * front / cam.fx
-            gate = front + max(pc["depth_gate_min"], pc["depth_gate_size"] * size)
-            vox = sc.g_vox[fg]
-            ok = vox >= 0
-            pin = ok & inm & (fz <= gate)
-            np.add.at(pos, vox[pin], fw[pin])
-            nout = ok & ~inm
-            np.add.at(neg, vox[nout], fw[nout])
-            used.append({"view": v, "sam": s, "mask_px": int(m.sum()), "w_in": round(float(fw[pin].sum()), 1),
-                         "w_gated": round(float(fw[ok & inm & (fz > gate)].sum()), 1), "gate": round(gate, 3)})
+            p_v, n_v, st = res
+            pos += p_v
+            neg += n_v
+            used.append({"view": v, "sam": s, **st})
         usable = bool(used) and c["cls"] in REPAIRABLE and c["confidence"] >= pc["min_confidence"]
         arrays[f"pos_{ci}"], arrays[f"neg_{ci}"] = pos, neg
         cands.append({**c, "usable": usable, "views_used": used, "sam_scores": sm["scores"].get(c["cid"])})
