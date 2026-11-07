@@ -305,7 +305,9 @@ viewer:
     max_checks: 3                      # next safe checks read aloud
     safety_line: "Site procedures, lockout-tagout and permits apply."
     arrive_gap: 0.6                    # worker counts as "in front of" the target within this box gap (units)
-  start_facing: auto        # initial worker direction at the door: auto = straight into the room (away from
+  reset_on_connect: true    # a refresh / new browser resets to the start state (worker at the door, POV, start
+                            # camera). Note: also resets the walk for browsers already open (one shared scene)
+  start_facing: auto       # initial worker direction at the door: auto = straight into the room (away from
                             # the door wall scene.back_wall_z), or [dx, dz] e.g. [0, 1]
   pov:                      # "Worker view (POV)": camera at the worker's eyes (height = avatar head_h)
     on_start: true          # viewer opens in the worker's view at the door (switch off: room overview camera)
