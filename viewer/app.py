@@ -328,6 +328,8 @@ class Sim:
         self._build_gui()
         if self.cb_pov.value:                           # open in the worker's view at the door
             self.set_pov(True)
+        else:                                           # else an overview behind the worker at the door
+            self.set_overview_initial()
         self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
         self.h_corr_acc: list[Any] = []
         self.annot: Any = None
@@ -1436,6 +1438,7 @@ class Sim:
         clients = self.server.get_clients().values()
         if on:
             self._pov_look = None
+            self._initial_cam_set = False               # update_pov makes the eye pose the refresh camera
             self._saved_cams = {c.client_id: (c.camera.position, c.camera.look_at, c.camera.fov)
                                 for c in clients}
             self.update_pov()
@@ -1445,18 +1448,35 @@ class Sim:
             with c.atomic():
                 if saved:
                     c.camera.position, c.camera.look_at, c.camera.fov = saved
-                else:                                   # joined while in POV: overview from above the door
+                else:                                   # joined while in POV: overview behind the worker
                     self.overview_camera(c)
         self._saved_cams = {}
+        self.set_overview_initial()
 
-    def overview_camera(self, c: Any) -> None:
+    def overview_pose(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(position, look_at, up) above and behind the worker, looking where it faces."""
         pc = self.vc["pov"]
         up = np.array([0.0, -1.0, 0.0])                                 # scene up = -y
         p = self.position()
         f = getattr(self, "_facing", self.start_dir)
+        pos = p + up * pc.get("overview_height", 1.8) - f * pc.get("overview_back", 0.4)
+        look = p + f * pc.get("overview_look_ahead", 4.0) + up * pc.get("overview_look_h", 0.8)
+        return pos, look, up
+
+    def overview_camera(self, c: Any) -> None:
+        pos, look, up = self.overview_pose()
         c.camera.up_direction = tuple(up)
-        c.camera.position = tuple(p + up * pc.get("overview_height", 1.6) - f * pc.get("overview_back", 0.3))
-        c.camera.look_at = tuple(p + f * 3.0)
+        c.camera.fov = float(np.radians(self.vc["pov"]["fov_deg"]))
+        c.camera.position, c.camera.look_at = tuple(pos), tuple(look)
+
+    def set_overview_initial(self) -> None:
+        """POV off: a refreshed/new browser (and viser's 'Reset View') gets the overview of where the worker
+        stands now, not the worker's eye position."""
+        pos, look, up = self.overview_pose()
+        ic = self.server.initial_camera
+        ic.up, ic.fov = tuple(up), float(np.radians(self.vc["pov"]["fov_deg"]))
+        ic.position, ic.look_at = tuple(pos), tuple(look)
+        self._overview_at = self.position().copy()
 
     def update_pov(self) -> None:
         """Camera at the worker's eyes, looking where the worker walks; at a stop or the target it looks
@@ -1634,6 +1654,8 @@ class Sim:
                 last_dist = self.dist
             if self.cb_pov.value:                                      # every tick, so turns finish smoothly
                 self.update_pov()                                      # even while paused at a stop
+            elif not self.playing and np.linalg.norm(self.position() - getattr(self, "_overview_at", 0)) > 1e-3:
+                self.set_overview_initial()                            # refresh camera follows a moved worker
             time.sleep(dt)
 
     def reach_stop(self, k: int) -> None:
