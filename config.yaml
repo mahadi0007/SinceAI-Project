@@ -237,7 +237,7 @@ viewer:
     crop_outside_walls: true  # drop floaters outside the room
     crop_margin: 0.15
     dark_threshold: 0.0     # hide splats darker than this (0 = keep all, as originally; ~0.04 removes most dark haze)
-  label_mode: Equipment    # Equipment (mapped + non-pipe objects) | All objects | Nearby only | Off
+  label_mode: Needs attention   # Needs attention (non-healthy Excel assets) | Equipment (mapped + non-pipe) | All objects | Nearby only | Off
   equipment_label_scale: 0.8  # font scale for equipment labels
   all_label_scale: 0.55     # font scale for pipe/fitting labels in "All objects"
   other_label_scale: 0.75   # font scale for nearby objects without asset record
@@ -279,6 +279,7 @@ viewer:
     arm_swing: 0.35               # rad
     bob: 0.025
     ring_color: [30, 144, 255]
+    show_ring: false             # draw the proximity-radius disc around the worker (arrival logic works either way)
     colors:
       vest: [255, 120, 0]         # hi-vis orange
       trousers: [35, 45, 80]
