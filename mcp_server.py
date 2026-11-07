@@ -27,7 +27,10 @@ mcp = MCPServer(
         "results and cite evidence IDs (TEL-*, EVT-*, WO-*, CASE-*, DOC-*, DQ-*). Never recommend autonomous "
         "physical action: recommend verification and escalation; site procedures, LOTO and permits apply. "
         "Use diagnose(allow_paid=false) unless the user explicitly asks for a fresh paid diagnosis. "
-        "If the viewer is running, show_in_viewer / walk_in_viewer / tour_in_viewer move the camera or worker."),
+        "If the viewer is running, show_in_viewer / walk_in_viewer / tour_in_viewer move the camera or worker. "
+        "Only ~30 objects have Excel records (search_assets); the scene has ~900 detected objects with vision "
+        "labels (tanks, ladders, cabinets, trolleys, ...): use find_objects for those, then act on their "
+        "object_id. walk_in_viewer / show_in_viewer also accept a label (e.g. 'tank') = nearest reachable one."),
 )
 
 
@@ -38,6 +41,15 @@ def search_assets(condition: str | None = None, asset_class: str | None = None, 
     condition: attention_required | degraded | watch | healthy. asset_class: e.g. pump, motor, valve,
     transmitter, sensor. issue: e.g. CAVITATION, OVERHEATING. text: free words matched against tag/class/issue."""
     return T.search_assets(condition, asset_class, issue, text, limit)
+
+
+@mcp.tool()
+def find_objects(label: str | None = None, text: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Find ANY of the ~900 detected 3D objects by vision label, including equipment WITHOUT an Excel
+    record: e.g. tank/vessel, ladder/stairs, electrical cabinet, cable tray, trolley, box/crate, sign,
+    manual valve, pump, motor. Use this when search_assets (Excel assets only) finds nothing.
+    Returns object_ids usable with walk_in_viewer / show_in_viewer / route_to / nearby."""
+    return T.find_objects(label, text, limit)
 
 
 @mcp.tool()
@@ -117,7 +129,8 @@ def show_in_viewer(key: str) -> dict[str, Any]:
 @mcp.tool()
 def walk_in_viewer(key: str) -> dict[str, Any]:
     """In the running 3D viewer: the worker walks from where it stands to the asset/object
-    (collision-free; reports if there is no path or no asset record)."""
+    (collision-free; reports if there is no path or no asset record). key: tag, object id, or a
+    vision label such as 'tank' (then the nearest reachable object with that label)."""
     return T.walk_in_viewer(key)
 
 

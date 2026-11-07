@@ -81,9 +81,9 @@ The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id 
 - Safety and cost: data tools are read-only, work orders are drafts, no physical control; only
   `diagnose(allow_paid=true)` can spend a request from the team's paid budget.
 
-## Viewer chat ("Ask the copilot")
+## Viewer chat ("Ask the MCP")
 
-The viewer panel has a chat box. It works on every computer, with or without Claude:
+The viewer panel "Ask the MCP" has a chat box. It works on every computer, with or without Claude:
 
 | Question type | Who answers | Needs |
 |---|---|---|

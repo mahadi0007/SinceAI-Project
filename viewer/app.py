@@ -813,7 +813,7 @@ class Sim:
     # --- routes: inspection tour vs. go to one equipment ---
     def _build_chat_gui(self, g: Any) -> None:
         """Chat: quick commands (instant, free) -> Claude Code headless with our MCP tools."""
-        with g.add_folder("Ask the copilot (chat)"):
+        with g.add_folder("Ask the MCP"):
             self.tx_chat = g.add_text("Question", "Which assets need attention?")
             b_chat = g.add_button("Ask", color="violet")
             self.md_chat_status = g.add_markdown("", visible=False)
@@ -846,7 +846,8 @@ class Sim:
     def chat(self, question: str) -> None:
         from copilot.chat import answer, parse_quick
         self._chat_busy = True
-        quick = self.cfg["chat"].get("quick_commands", True) and parse_quick(question) is not None
+        labels = sorted({n["label"] for n in self.nodes})
+        quick = self.cfg["chat"].get("quick_commands", True) and parse_quick(question, labels) is not None
         t0 = time.time()
 
         def tick() -> None:
@@ -957,20 +958,48 @@ class Sim:
                 return n
         return None
 
+    def nearest_by_label(self, query: str, reachable: bool) -> tuple[dict | None, str]:
+        """Object whose vision label matches `query` (e.g. 'tank' -> 'tank/vessel'): the reachable one with the
+        shortest walk from the worker (reachable=True) or the most confident one (False)."""
+        from copilot.tools import label_matches
+        cands = sorted((n for n in self.nodes if label_matches(n["label"], query)),
+                       key=lambda n: -(n.get("label_confidence") or 0))[: self.vc.get("label_candidates", 10)]
+        if not cands:
+            return None, f"No asset or detected object called '{query}'."
+        if not reachable:
+            return cands[0], f"{len(cands)} '{cands[0]['label']}' object(s); showing the most confident."
+        if self.planner is None:
+            from pipeline.tour import WalkPlanner
+            self.planner = WalkPlanner(self.cfg)
+        p, best = self.position(), None
+        for n in cands:
+            plan = self.planner.to_object(float(p[0]), float(p[2]), n)
+            if plan["ok"] and (best is None or plan["length"] < best[1]):
+                best = (n, plan["length"])
+        if best is None:
+            return None, f"None of the {len(cands)} '{cands[0]['label']}' objects is reachable from here."
+        return best[0], f"nearest reachable of {len(cands)} '{best[0]['label']}' object(s)"
+
     def handle_command(self, c: dict) -> dict:
         cmd = c.get("cmd")
         if cmd in ("show", "walk"):
-            n = self.find_node(c.get("target", ""))
-            if n is None:
-                return {"ok": False, "message": f"Unknown asset/object '{c.get('target')}'."}
+            n, why = self.find_node(c.get("target", "")), ""
+            if n is None:                                    # not a tag / id: try a vision label ("tank")
+                n, why = self.nearest_by_label(c.get("target", ""), reachable=cmd == "walk")
+                if n is None:
+                    return {"ok": False, "message": why}
             name = n["asset"]["tag"] if n.get("asset") else f"{n['id']} ({n['label']})"
             if cmd == "show":
                 self.select(n)
                 for client in self.server.get_clients().values():
                     self.fly_to(n, client)
-                return {"ok": True, "message": f"Showing {name} in the viewer (selected, camera moved)."}
+                return {"ok": True, "message": f"Showing {name} in the viewer (selected, camera moved)"
+                                               + (f"; {why.rstrip('.')}." if why else ".")}
             self.go_to(n)
             msg = self.md_goto.content.replace("**", "").replace("⚠️ ", "").replace("🚶 ", "")
+            if why and self.playing:
+                msg = msg.split("  \n")[0] + f" ({why})."
+                self.md_goto.content += f"  \n_{why}_"
             return {"ok": self.playing, "message": msg}
         if cmd == "tour":
             from pipeline.tour import plan_tour

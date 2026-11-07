@@ -33,10 +33,40 @@ def tags_in(text: str) -> list[str]:
     return [t.upper() for t in TAG_RE.findall(text)]
 
 
-def parse_quick(text: str) -> dict | None:
-    """Recognise a fixed command; None means 'ask Claude'."""
+WALK_RE = re.compile(r"\b(?:take me|go|walk|navigate|bring me)\b.*?\bto\b\s+(?:the\s+|a\s+|an\s+)?(?P<x>[a-z/ -]+?)\s*[?.!]*$")
+SHOW_RE = re.compile(r"\b(?:show(?: me)?|where is|find|locate|highlight)\b\s+(?:the\s+|a\s+|an\s+)?(?P<x>[a-z/ -]+?)\s*[?.!]*$")
+
+
+def label_target(text: str, labels: list[str] | None) -> tuple[str, str] | None:
+    """('walk'|'show', phrase) when the request names a known object label, e.g. 'take me to the tank'."""
+    if not labels:
+        return None
+    t = text.strip().lower()
+
+    def words(s: str) -> set[str]:
+        return {w.rstrip("s") for w in re.split(r"[\s/]+", s.lower()) if w}
+
+    for cmd, rx in (("walk", WALK_RE), ("show", SHOW_RE)):
+        m = rx.search(t)
+        if not m:
+            continue
+        phrase = m.group("x").strip()
+        ask = words(phrase) - {"nearest", "closest"}
+        # only when every word belongs to one label ("tank", "tank/vessel", "electrical cabinet");
+        # qualifiers like "worst pump" or "overheating motor" need reasoning -> Claude
+        if ask and any(ask <= words(lb) for lb in labels):
+            return cmd, phrase
+    return None
+
+
+def parse_quick(text: str, labels: list[str] | None = None) -> dict | None:
+    """Recognise a fixed command; None means 'ask Claude'. `labels` = known vision labels in the scene."""
     t = text.strip().lower()
     tags = tags_in(text)
+    if not tags:
+        lt = label_target(text, labels)
+        if lt:
+            return {"cmd": lt[0], "target": lt[1]}
     if t in ("help", "?", "commands"):
         return {"cmd": "help"}
     if re.search(r"\b(tour|inspection round)\b", t) and re.search(r"\b(start|run|begin|do|tour past|tour via)\b", t):
@@ -157,7 +187,9 @@ def ask_claude(question: str, cc: Cfg) -> str:
 
 def answer(question: str, cc: Cfg, act: Callable[[str, str], str]) -> tuple[str, str]:
     """Returns (answer markdown, route) where route is 'quick' or 'claude'."""
-    q = parse_quick(question) if cc.get("quick_commands", True) else None
+    from copilot.tools import scene
+    labels = sorted({n["label"] for n in scene()["objects"] if n["kind"] == "object"})
+    q = parse_quick(question, labels) if cc.get("quick_commands", True) else None
     if q is not None:
         return run_quick(q, act), "quick"
     return ask_claude(question, cc), "claude"

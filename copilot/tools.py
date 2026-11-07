@@ -91,6 +91,37 @@ def search_assets(condition: str | None = None, asset_class: str | None = None, 
     return {"ok": True, "count": len(out), "assets": out[:limit]}
 
 
+def label_matches(label: str, query: str) -> bool:
+    """'tank' matches 'tank/vessel', 'stairs' matches 'ladder/stairs', 'cabinet' matches 'electrical cabinet'."""
+    q = query.strip().lower().rstrip("s") if len(query.strip()) > 3 else query.strip().lower()
+    parts = [p.strip() for p in label.lower().replace("/", " / ").split("/")] + [label.lower()]
+    return any(q and (q in p or p in query.lower()) for p in parts if p)
+
+
+def objects_by_label(query: str) -> list[dict]:
+    """All detected scene objects whose vision label matches, most confident first."""
+    hits = [n for n in scene()["objects"] if n["kind"] == "object" and label_matches(n["label"], query)]
+    return sorted(hits, key=lambda n: -(n.get("label_confidence") or 0))
+
+
+def find_objects(label: str | None = None, text: str | None = None, limit: int = 20) -> dict:
+    """Search ALL detected 3D objects (also those without an Excel record) by vision label or reason text."""
+    hits = objects_by_label(label) if label else [n for n in scene()["objects"] if n["kind"] == "object"]
+    if text:
+        words = text.lower().split()
+        hits = [n for n in hits if all(w in f"{n['label']} {n.get('label_reason', '')}".lower() for w in words)]
+    labels = sorted({n["label"] for n in scene()["objects"] if n["kind"] == "object"})
+    if not hits:
+        return {"ok": False, "message": f"No detected object matches label={label!r} text={text!r}.",
+                "known_labels": labels}
+    return {"ok": True, "count": len(hits),
+            "objects": [{**summary(n), "reason": n.get("label_reason"),
+                         "center_m": [u2m(v) for v in n["center"]], "size_m": [u2m(v) for v in n["extent"]]}
+                        for n in hits[:limit]],
+            "note": "Objects with asset_record=false are detected in 3D but have no Excel data; "
+                    "use their object_id with walk_in_viewer / show_in_viewer / route_to."}
+
+
 def get_asset(key: str) -> dict:
     """Identity, condition and 3D mapping of one asset or scene object."""
     n = resolve(key)
