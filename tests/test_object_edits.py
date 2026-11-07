@@ -74,3 +74,38 @@ def test_step_buttons_convert_metres_and_turn_direction():
     assert np.allclose(calls[-1][0], [0, -.1, 0])
     gui.turn.click(NS(target=gui.turn))
     assert np.isclose(calls[-1][1], np.pi / 6)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("move it 20 cm up", {"cmd": "move", "target": "", "forward_m": 0., "right_m": 0., "up_m": .2}),
+    ("move OBJ-0269_copy1 .5 m left and 10 mm back",
+     {"cmd": "move", "target": "OBJ-0269_copy1", "forward_m": -.01, "right_m": -.5, "up_m": 0.}),
+    ("move it -20 cm up", {"cmd": "move", "target": "", "forward_m": 0., "right_m": 0., "up_m": -.2}),
+    ("turn it 30 degrees right", {"cmd": "turn", "target": "", "degrees": -30.}),
+    ("turn OBJ-0269 -30 degrees left", {"cmd": "turn", "target": "OBJ-0269", "degrees": -30.}),
+    ("rotate this 90 counter-clockwise", {"cmd": "turn", "target": "", "degrees": 90.}),
+    ("remove OBJ-0269", {"cmd": "remove", "target": "OBJ-0269"}),
+    ("put it back", {"cmd": "restore", "target": ""}),
+])
+def test_quick_edit_grammar(text, expected):
+    from copilot.chat import parse_quick
+    assert parse_quick(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "remove it only if it is a copy", "remove OBJ-0269 and restore OBJ-0030",
+    "move it 1 m left and 20 up unless blocked", "move the green chair 1 m up",
+    "rotate it 2 radians right", "move it 2 m left then remove it",
+])
+def test_qualified_edit_is_not_partially_executed(text):
+    from copilot.chat import parse_quick
+    assert parse_quick(text) is None
+
+
+@pytest.mark.parametrize("cmd, field, value", [
+    ("move", "up_m", float("nan")), ("move", "right_m", float("inf")),
+    ("turn", "degrees", "invalid"), ("turn", "degrees", None),
+])
+def test_invalid_edit_amount_does_not_change_selection(cmd, field, value):
+    s = Sim.__new__(Sim)  # no selection state: validation must run before any mutation
+    assert not s.edit_command({"cmd": cmd, field: value})["ok"]

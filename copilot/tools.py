@@ -306,3 +306,23 @@ def walk_in_viewer(key: str) -> dict:
 def tour_in_viewer(stops: list[str] | None = None) -> dict:
     """Start an inspection tour in the viewer (stops=None/[] = automatic from Excel), ends at the faulty target."""
     return viewer_command("tour", stops=list(stops) if stops else [], wait_s=15.0)
+
+
+def move_in_viewer(key: str = "", forward_m: float = 0.0, right_m: float = 0.0, up_m: float = 0.0) -> dict:
+    """Move an editable object in the viewer by metres, relative to the camera (negative = back / left / down)."""
+    return viewer_command("move", target=key, forward_m=forward_m, right_m=right_m, up_m=up_m)
+
+
+def turn_in_viewer(key: str = "", degrees: float = 0.0) -> dict:
+    """Turn an editable object in the viewer about the vertical axis (positive = left, negative = right)."""
+    return viewer_command("turn", target=key, degrees=degrees)
+
+
+def remove_in_viewer(key: str = "") -> dict:
+    """Remove an editable object from the viewer (a copy is deleted, an original can be restored)."""
+    return viewer_command("remove", target=key)
+
+
+def restore_in_viewer(key: str = "") -> dict:
+    """Put an editable object back where it was in the scan and delete its copies."""
+    return viewer_command("restore", target=key)

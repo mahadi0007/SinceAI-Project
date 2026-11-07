@@ -30,7 +30,9 @@ mcp = MCPServer(
         "If the viewer is running, show_in_viewer / walk_in_viewer / tour_in_viewer move the camera or worker. "
         "Only ~30 objects have Excel records (search_assets); the scene has ~900 detected objects with vision "
         "labels (tanks, ladders, cabinets, trolleys, ...): use find_objects for those, then act on their "
-        "object_id. walk_in_viewer / show_in_viewer also accept a label (e.g. 'tank') = nearest reachable one."),
+        "object_id. walk_in_viewer / show_in_viewer also accept a label (e.g. 'tank') = nearest reachable one. "
+        "move_in_viewer / turn_in_viewer / remove_in_viewer / restore_in_viewer edit the objects that cut out "
+        "cleanly; key '' or 'it' = the object selected in the viewer."),
 )
 
 
@@ -139,6 +141,44 @@ def tour_in_viewer(stops: list[str] | None = None) -> dict[str, Any]:
     """In the running 3D viewer: start an inspection tour door -> stops -> faulty target P-002.
     stops: tags in order; empty = automatic from Excel status."""
     return T.tour_in_viewer(stops)
+
+
+@mcp.tool()
+def move_in_viewer(key: str = "", forward_m: float = 0.0, right_m: float = 0.0, up_m: float = 0.0) -> dict[str, Any]:
+    """In the running 3D viewer: move an editable object by metres relative to the camera
+    (forward = away from the viewer; negative values = back / left / down). key: object id (OBJ-0269),
+    a copy (OBJ-0269_copy1), a vision label such as 'chair' (the movable one closest to the camera),
+    or '' / 'it' for the object selected in the viewer."""
+    return T.move_in_viewer(
+        key=key,
+        forward_m=forward_m,
+        right_m=right_m,
+        up_m=up_m,
+    )
+
+
+@mcp.tool()
+def turn_in_viewer(key: str = "", degrees: float = 0.0) -> dict[str, Any]:
+    """In the running 3D viewer: turn an editable object about the vertical axis
+    (positive degrees = left / counter-clockwise seen from above, negative = right). key: as move_in_viewer."""
+    return T.turn_in_viewer(
+        key=key,
+        degrees=degrees,
+    )
+
+
+@mcp.tool()
+def remove_in_viewer(key: str = "") -> dict[str, Any]:
+    """In the running 3D viewer: remove an editable object (an original can be restored, a copy is deleted).
+    key: as move_in_viewer."""
+    return T.remove_in_viewer(key=key)
+
+
+@mcp.tool()
+def restore_in_viewer(key: str = "") -> dict[str, Any]:
+    """In the running 3D viewer: put an editable object back where it was in the scan and delete its copies.
+    key: as move_in_viewer."""
+    return T.restore_in_viewer(key=key)
 
 
 @mcp.prompt()

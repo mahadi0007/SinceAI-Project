@@ -118,7 +118,7 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
 `mcp_server.py` exposes the field-service data and actions as MCP tools (thin wrapper over `copilot/tools.py`):
 `search_assets`, `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
 `plan_tour`, `draft_work_order`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
-`walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
+`walk_in_viewer`, `tour_in_viewer`, `move_in_viewer`, `turn_in_viewer`, `remove_in_viewer`, `restore_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
 
 - **Claude Code:** `.mcp.json` registers the server as `valmet-copilot`; open Claude Code in this folder and approve it.
   On Linux/macOS set `VALMET_PYTHON=.venv/bin/python` first (defaults to the Windows venv path).

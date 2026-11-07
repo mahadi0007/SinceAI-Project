@@ -322,6 +322,33 @@ def test_real_equipment_select_move_restore(sim):
     assert sim.layout_hash() == sim.base_layout and sim.nav_stale() is None
 
 
+def test_chat_edits_share_undo_and_navigation(sim):
+    from copilot.chat import parse_quick, run_quick
+    node = sim.find_node("P-003")
+    oid = node["id"]
+    sim.select(node, inst=oid)
+    pivot = np.array(sim.inst[oid]["h"].position)
+    for text in ("move it 20 cm up", "turn it 30 degrees right", f"remove {oid}"):
+        answer = run_quick(parse_quick(text), sim.chat_act)
+        assert not answer.startswith("⚠️"), answer
+        assert sim.nav_stale() and not sim.h_path.visible
+        if text.startswith("move"):
+            assert np.allclose(sim.inst[oid]["h"].position, pivot + [0, -.2 / sim.cfg["scene"]["units_to_m"], 0])
+        elif text.startswith("remove"):
+            assert sim.inst[oid]["removed"] and not sim.inst[oid]["h"].visible
+        sim.undo_edit()
+        assert sim.nav_stale() is None and not sim.inst[oid]["removed"]
+        sim.select(node, inst=oid)
+    sim.edit_command({"cmd": "move", "target": oid, "right_m": .2})
+    moved = sim.inst[oid]["h"].position
+    assert sim.edit_command({"cmd": "restore", "target": oid})["ok"]
+    assert sim.nav_stale() is None and np.allclose(sim.inst[oid]["h"].position, pivot)
+    sim.undo_edit()
+    assert np.allclose(sim.inst[oid]["h"].position, moved) and sim.nav_stale()
+    sim.undo_edit()
+    assert sim.nav_stale() is None
+
+
 def test_copy_has_no_identity_and_persists(sim):
     sim.set_display("Overlay")
     p3 = sim.find_node("P-003")
