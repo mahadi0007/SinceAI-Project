@@ -49,3 +49,17 @@ def test_reused_label_passes_decide():
     g = {"label": "pump", "confidence": 0.8, "reason": "r", "model": "gemini-3.5-flash", "source": "gemini_vision"}
     d = L.decide(a, g, lc)
     assert d["label"] == "pump" and d["label_source"] == "gemini_vision"
+
+
+def test_export_then_reuse_roundtrip(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "assets_labeled.json").write_text(json.dumps([
+        obj(1, 10, [1, 2, 3], label="tank/vessel", label_confidence=0.9, label_source="gemini_vision", label_reason="r"),
+        obj(2, 20, [4, 5, 6], label="other", label_confidence=0.3, label_source="geometry_rules")]), encoding="utf-8")
+    monkeypatch.setattr(L, "out_path", lambda c, n: out / n)
+    monkeypatch.setattr(L, "repo_path", lambda p: tmp_path / p)
+    c = {"label": {"vision_sources": ["gemini_vision"], "reuse_from": ["shared.json"]}}
+    assert L.export_vision_labels(c, "shared.json") == 1                         # only the vision label is shared
+    r = L.reusable_labels(c, {})
+    assert r[L.geo_sig(obj(1, 10, [1, 2, 3]))]["label"] == "tank/vessel"

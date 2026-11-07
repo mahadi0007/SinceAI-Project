@@ -405,7 +405,26 @@ def run(cfg: Cfg, rules_only: bool = False, max_batches: int | None = None,
     return assets
 
 
+def export_vision_labels(cfg: Cfg, dest: str) -> int:
+    """Write the vision labels of out/assets_labeled.json as a small shareable file (geometry signature + label),
+    in the assets_labeled format that label.reuse_from reads. Committed, it gives every clone the same labels."""
+    lc = cfg["label"]
+    keep = ("id", "kind", "n_points", "center", "label", "label_confidence", "label_source", "label_reason",
+            "label_model")
+    rows = [{k: a[k] for k in keep if k in a} for a in json.loads(out_path(cfg, "assets_labeled.json").read_text(
+        encoding="utf-8")) if a.get("kind") == "object" and a.get("label_source") in lc["vision_sources"]]
+    p = repo_path(dest)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[\n" + ",\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n]\n", encoding="utf-8")
+    print(f"[export] {len(rows)} vision labels -> {p}")
+    return len(rows)
+
+
 if __name__ == "__main__":
     cfg = load_config()
+    if "--export-labels" in sys.argv:                 # python -m pipeline.label --export-labels [path]
+        i = sys.argv.index("--export-labels")
+        export_vision_labels(cfg, sys.argv[i + 1] if len(sys.argv) > i + 1 else cfg["label"]["shared_labels"])
+        sys.exit(0)
     mb = int(sys.argv[sys.argv.index("--batches") + 1]) if "--batches" in sys.argv else cfg["label"]["max_batches"]
     run(cfg, rules_only="--rules-only" in sys.argv, max_batches=mb)

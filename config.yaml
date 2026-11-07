@@ -79,7 +79,9 @@ label:
   workers: 1                # one request at a time (paid; budget in copilot.budget)
   max_batches: 1            # per run; null = all (only after the pilot justifies it)
   vision_sources: [featherless_vision, gemini_vision]   # label_source values that count as VLM evidence
-  reuse_from: [out/assets_labeled.json]   # earlier vision labels, reused for objects with identical geometry (free)
+  shared_labels: review/vision_labels.json   # vision labels in git (python -m pipeline.label --export-labels writes it)
+  reuse_from: [review/vision_labels.json, out/assets_labeled.json]   # earlier vision labels reused for objects with
+                            # identical geometry (free); later files win, so this machine's own newer labels come first
   manual_sources: [manual_review]       # reviewer-confirmed component CLASS (never asset identity)
   manual_class_vocab:                   # correction-tool class -> label vocab
     pump: pump
