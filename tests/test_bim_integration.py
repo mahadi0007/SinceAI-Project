@@ -360,6 +360,45 @@ def test_copy_has_no_identity_and_persists(sim):
     assert name not in sim.inst and sim.nav_stale() is None
 
 
+def test_failed_rebuild_in_edit_callback_keeps_walking_blocked(sim, monkeypatch):
+    c = sim.movable["OBJ-0049"]["c"]
+    sim.edit_action("move OBJ-0049", lambda: setattr(sim.inst["OBJ-0049"]["h"], "position", tuple(c + [0.3, 0, 0])))
+    sim.apply_layout()
+    applied = sim.layout_hash()
+    assert sim.nav_stale() is None and sim.edits["applied_layout"]["hash"] == applied
+    sim.undo_edit()                                                   # back to the unedited scene: no rebuild needed
+    assert sim.nav_stale() is None and sim.nav_inputs is None
+
+    def broken(_layout):
+        raise ValueError("layout changed while navigation was being rebuilt")
+    monkeypatch.setattr(sim, "_build_nav", broken)
+    sim.edit_action("move OBJ-0049", lambda: setattr(sim.inst["OBJ-0049"]["h"], "position", tuple(c + [0.3, 0, 0])))
+    assert sim.layout_hash() == applied                               # the applied layout again -> rebuild fails
+    assert sim.nav_stale() and not sim.playing and not sim.h_path.visible
+    assert "rebuild failed" in sim.md_layout.content
+    sim.go_to(sim.find_node("M-005"))
+    assert not sim.playing                                            # never falls back to the unedited routes
+    monkeypatch.undo()
+    sim.apply_layout()                                                # retry succeeds once the inputs are fine
+    assert sim.nav_stale() is None and "rebuild failed" not in sim.md_layout.content
+
+
+def test_viewer_starts_when_saved_layout_cannot_be_rebuilt(sim):
+    """A saved applied_layout with missing out/ navigation files must not stop the viewer from starting."""
+    from viewer.app import Sim
+    assert sim.edits["applied_layout"] and sim.layout_hash() == sim.edits["applied_layout"]["hash"]
+    (sim.out / "navgrid.npz").unlink()
+    cfg2 = {**sim.cfg, "viewer": {**sim.cfg["viewer"], "port": free_port()}}
+    s2 = Sim(cfg2)
+    try:
+        assert s2.layout_hash() == sim.layout_hash()
+        assert s2.nav_stale() and not s2.h_path.visible and "rebuild failed" in s2.nav_error
+        s2.go_to(s2.find_node("M-005"))
+        assert not s2.playing
+    finally:
+        s2.server.stop()
+
+
 def test_mismatched_edits_rejected(sim, tmp_path):
     bad = se.new_state({**sim.revision, "segmentation": "b9ccba976377"}, {"OBJ-0029": [0, 0, 0]})
     (sim.out / "scene_edits.json").write_text(json.dumps(bad))
