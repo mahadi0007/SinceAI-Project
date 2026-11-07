@@ -45,7 +45,7 @@ def load_splat(path: str, min_opacity: float = 0.1, max_scale: float = 0.3,
     """Return clean arrays in native file coordinates.
 
     keys: xyz (N,3), rgb (N,3 in 0..1), opacity (N,), scales (N,3, linear),
-          quats_wxyz (N,4, normalised), n_file, n_valid_prefix
+          quats_wxyz (N,4, normalised), row_ids (N,) source PLY rows, n_file, n_valid_prefix
     """
     offset, n, names = _read_header(path)
     raw = np.memmap(path, dtype=np.float32, mode="r", offset=offset,
@@ -81,6 +81,7 @@ def load_splat(path: str, min_opacity: float = 0.1, max_scale: float = 0.3,
         "opacity": opacity[keep].astype(np.float32),
         "scales": scales[keep].astype(np.float32),
         "quats_wxyz": q[keep].astype(np.float32),
+        "row_ids": np.where(keep)[0].astype(np.int64),   # original PLY row of every kept Gaussian
         "n_file": n,
         "n_valid_prefix": cut,
     }

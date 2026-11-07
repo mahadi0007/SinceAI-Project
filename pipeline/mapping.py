@@ -7,6 +7,12 @@ Rules (DOC-3D-MAPPING: explicit confidence, never silently guess identity):
   3. geometric rule from segment hints/features                 (geometry_rule, 0.55-0.7)
   4. any remaining unmapped object, nearest to the path, seeded (random_fallback, 0.3-0.5)
 All other objects stay scene objects with status "no asset record".
+
+Identity: a class-level match (VLM says "pump") does NOT establish which tag (P-002) the object is.
+Every mapping therefore carries identity_verified=False and identity_basis, unless a user-confirmed
+real-scene anchor or a readable tag is supplied (mapping.verified_identities, with provenance).
+Workbook Scene_Anchors are synthetic placeholders (mapping_status=placeholder_until_valmet_scene_received):
+their coordinates/dimensions are never used as scene positions; they are kept as workbook_* columns.
 """
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-from pipeline.common import load_config, out_path, repo_path
+from pipeline.common import is_vision_label, load_config, out_path, repo_path
 
 Cfg = dict[str, Any]
 Obj = dict[str, Any]
@@ -78,7 +84,8 @@ RULES: dict[str, Callable[[Obj, Cfg], bool]] = {
 # ---------- assignment ----------
 
 class Mapper:
-    def __init__(self, objs: list[Obj], path_xz: np.ndarray, mc: Cfg) -> None:
+    def __init__(self, objs: list[Obj], path_xz: np.ndarray, mc: Cfg, cfg: Cfg | None = None) -> None:
+        self.cfg = cfg or {}
         self.objs = {o["id"]: o for o in objs if o["kind"] == "object"}
         self.dist = {k: path_distance(o, path_xz) for k, o in self.objs.items()}
         self.mc = mc
@@ -96,10 +103,21 @@ class Mapper:
         hi = self.mc["confidence"]["label_match"][1]
         return round(float(np.clip(obj.get("label_confidence", lo), lo, hi)), 2)
 
-    def assign(self, asset_id: str, obj_id: str, method: str, conf: float, evidence: str) -> None:
+    def assign(self, asset_id: str, obj_id: str, method: str, conf: float, evidence: str,
+               verified: dict | None = None) -> None:
         self.used[obj_id] = asset_id
+        basis = {"verified_identity": "user_confirmed", "label_match": "component_class_only",
+                 "label_match_navigation_target": "component_class_only",
+                 "geometry_rule": "geometry_only_synthetic", "random_fallback": "synthetic_placeholder",
+                 "forced_demo_target": "synthetic_demo"}[method]
         self.result[asset_id] = {"object_id": obj_id, "mapping_method": method,
-                                 "mapping_confidence": conf, "mapping_evidence": evidence}
+                                 "mapping_confidence": conf, "mapping_evidence": evidence,
+                                 "identity_verified": verified is not None, "identity_basis": basis,
+                                 "synthetic_assignment": basis.endswith(("synthetic", "placeholder", "demo")),
+                                 "identity_provenance": verified}
+
+    def vision_match(self, o: Obj, labels: Any) -> bool:
+        return is_vision_label(o, self.cfg, labels, self.mc.get("vision_min_conf", 0.0))
 
     def free(self, pred: Callable[[Obj], bool]) -> list[str]:
         return sorted((k for k, o in self.objs.items() if k not in self.used and pred(o)),
@@ -117,7 +135,7 @@ class Mapper:
         rule = self.mc["class_rules"][cls]
         near = tag in self.mc["near_path_tags"]
         labels = set(rule["labels"])
-        cands = self.free(lambda o: o.get("label") in labels and o.get("label_source") == "gemini_vision")
+        cands = self.free(lambda o: self.vision_match(o, labels))
         if cands:
             k = self.pick(cands, near)
             self.assign(aid, k, "label_match", self.label_conf(self.objs[k]),
@@ -141,14 +159,22 @@ class Mapper:
                     f"no {cls}-like object left; nearest-to-path unmapped object (seed {self.mc['seed']})")
 
 
-def run_mapping(xl: dict[str, pd.DataFrame], objs: list[Obj], path: dict, mc: Cfg) -> Mapper:
+def run_mapping(xl: dict[str, pd.DataFrame], objs: list[Obj], path: dict, mc: Cfg,
+                cfg: Cfg | None = None) -> Mapper:
     path_xz = np.array(path["points"])[:, [0, 2]]
-    m = Mapper(objs, path_xz, mc)
+    m = Mapper(objs, path_xz, mc, cfg)
     am = xl["Asset_Master"]
+    for v in mc.get("verified_identities") or []:       # user-confirmed real-scene identities first
+        k = nearest_object(m, v["point"]) if v.get("point") is not None else v.get("object_id")
+        if k and k in m.objs:
+            aid = am[am["tag"] == v["tag"]]["asset_id"].iloc[0]
+            m.assign(aid, k, "verified_identity", float(v.get("confidence", 0.95)),
+                     f"user-confirmed: {v.get('method')}", verified={k2: v[k2] for k2 in v if k2 != "confidence"})
     target = am[am["tag"] == mc["target_tag"]].iloc[0]
     tobj = m.objs[path["target_object"]]
-    if (tobj.get("label") in mc["class_rules"][target["asset_class"]]["labels"]
-            and tobj.get("label_source") == "gemini_vision"):
+    if target["asset_id"] in m.result:
+        pass
+    elif m.vision_match(tobj, mc["class_rules"][target["asset_class"]]["labels"]):
         m.assign(target["asset_id"], tobj["id"], "label_match_navigation_target", m.label_conf(tobj),
                  f"navigation target; VLM label '{tobj['label']}' ({tobj['label_confidence']}) "
                  f"matches {target['asset_class']}")
@@ -169,6 +195,16 @@ def run_mapping(xl: dict[str, pd.DataFrame], objs: list[Obj], path: dict, mc: Cf
             n_sensor += 1
         m.map_asset(r, host)
     return m
+
+
+def nearest_object(m: Mapper, point: list[float]) -> str | None:
+    p = np.array(point, float)
+
+    def d(o: Obj) -> float:
+        lo, hi = np.array(o["bbox_min"]), np.array(o["bbox_max"])
+        return float(np.linalg.norm(np.maximum(np.maximum(lo - p, p - hi), 0)))
+    best = min(m.objs.values(), key=d)
+    return best["id"] if d(best) <= 0.15 else None
 
 
 # ---------- outputs ----------
@@ -192,7 +228,8 @@ def scene_graph(objs: list[Obj], m: Mapper, xl: dict[str, pd.DataFrame], path: d
         node = {k: o[k] for k in ("id", "kind", "hint", "tags", "center", "extent",
                                   "bbox_min", "bbox_max", "n_points", "color")}
         node["label"] = o.get("label") or o["hint"] or ("structure" if o["kind"] == "structure" else "object")
-        for k in ("label_confidence", "label_source", "label_reason", "label_vlm", "features"):
+        for k in ("label_confidence", "label_source", "label_model", "label_reason", "label_vlm", "features",
+                  "fragments", "baseline_ids", "repair", "assembly"):
             if k in o:
                 node[k] = o[k]
         node["obb"] = o.get("obb", {})
@@ -207,7 +244,9 @@ def scene_graph(objs: list[Obj], m: Mapper, xl: dict[str, pd.DataFrame], path: d
         nodes.append(node)
     tgt = m.result[am[am["tag"] == cfg["mapping"]["target_tag"]].index[0]]
     return {"scene": {"up_direction": cfg["scene"]["up_direction"], "floor_y": cfg["scene"]["floor_y"],
-                      "units_to_m": cfg["scene"]["units_to_m"], "object_source": source},
+                      "units_to_m": cfg["scene"]["units_to_m"], "object_source": source,
+                      "segmentation": path.get("segmentation"),
+                      "identity_note": "asset identities are synthetic/unverified unless identity_verified=true"},
             "target": {"tag": cfg["mapping"]["target_tag"], "object_id": tgt["object_id"]},
             "path": {"file": "path.json", "length": path["length"], "min_clearance": path["min_clearance"]},
             "counts": {"objects": sum(o["kind"] == "object" for o in objs),
@@ -220,6 +259,11 @@ def scene_anchors(xl: dict[str, pd.DataFrame], m: Mapper, objs: list[Obj], cfg: 
     sa = xl["Scene_Anchors"].copy()
     by_id = {o["id"]: o for o in objs}
     s = cfg["scene"]["units_to_m"]
+    keep = [c for c in sa.columns if c.endswith("_m") or c in ("mapping_status", "mapping_confidence",
+                                                                "identity_methods", "remap_instruction")]
+    for c in keep:
+        sa[f"workbook_{c}"] = sa[c]                       # synthetic placeholder values, kept for audit only
+    sa = sa.astype(object)
     for i, r in sa.iterrows():
         mp = m.result[r["asset_id"]]
         o = by_id[mp["object_id"]]
@@ -233,6 +277,8 @@ def scene_anchors(xl: dict[str, pd.DataFrame], m: Mapper, objs: list[Obj], cfg: 
         sa.loc[i, "mapping_confidence"] = mp["mapping_confidence"]
         sa.loc[i, "remap_instruction"] = mp["mapping_evidence"]
         sa.loc[i, "object_id"] = o["id"]
+        sa.loc[i, "identity_verified"] = mp["identity_verified"]
+        sa.loc[i, "identity_basis"] = mp["identity_basis"]
     return sa
 
 
@@ -247,7 +293,7 @@ def print_summary(m: Mapper, xl: dict[str, pd.DataFrame], mc: Cfg) -> None:
         tag = am.loc[aid, "tag"]
         flag = " <- TARGET" if tag == mc["target_tag"] else (" (watch)" if tag in mc["near_path_tags"] else "")
         print(f"  {tag:7s} {am.loc[aid, 'asset_class']:21s} -> {v['object_id']}  "
-              f"conf {v['mapping_confidence']:.2f}  {v['mapping_method']:18s} "
+              f"conf {v['mapping_confidence']:.2f}  {v['mapping_method']:18s} {v['identity_basis']:24s} "
               f"path_dist {m.dist[v['object_id']]:.2f}  {cs.loc[aid, 'condition_state']}{flag}")
 
 
@@ -256,7 +302,7 @@ def run(cfg: Cfg) -> dict:
     xl = load_excel(cfg)
     objs, source = load_objects(cfg)
     path = load_path(cfg)
-    m = run_mapping(xl, objs, path, mc)
+    m = run_mapping(xl, objs, path, mc, cfg)
     assert len(m.result) == len(xl["Asset_Master"]), "not all assets mapped"
     assert len(set(v["object_id"] for v in m.result.values())) == len(m.result), "object mapped twice"
     sg = scene_graph(objs, m, xl, path, cfg, source)

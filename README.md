@@ -24,7 +24,7 @@ All tunable values are in `config.yaml`.
 ```bash
 python -m venv .venv            # Python 3.12 tested
 .venv/Scripts/pip install -r requirements.txt     # Windows (use .venv/bin/pip on Linux/macOS)
-cp .env.example .env            # put your GEMINI_API_KEY (and FEATHERLESS_API_KEY, optional ELEVENLABS_API_KEY) in .env
+cp .env.example .env            # put your FEATHERLESS_API_KEY (and optional ELEVENLABS_API_KEY) in .env
 ```
 
 Put the challenge files in `data/` (not in git):
@@ -35,8 +35,13 @@ it still works by switching `paths.ply` and the `scene`/`known_planes` values in
 ## Run
 
 ```bash
-python -m pipeline.segment
-python -m pipeline.label        # --rules-only to skip Gemini
+VALMET_OUT=out_baseline python -m pipeline.segment     # baseline (keeps fine fragments + source rows)
+python -m pipeline.repair geo                          # geometry-only pipe continuity -> out_geo/
+python -m pipeline.propose RV-01 all                   # per review region: render, Qwen proposal (paid), SAM 2.1, visible support
+python -m pipeline.repair context                      # geometry + context repairs -> out/ (repairs.json, reversible)
+python -m pipeline.evaluate out_baseline out_geo out   # reviewed references in review/regions.yaml
+python -m pipeline.compare                             # before/after images -> out_review/compare/
+python -m pipeline.label        # --rules-only: no requests (paid budget: copilot.budget)
 python -m pipeline.navgrid
 python -m pipeline.mapping
 python -m copilot.agent P-002   # optional: diagnosis from the command line
@@ -53,3 +58,10 @@ python -m viewer.app            # open http://localhost:8080 and press Play
 - Navigation uses the observed floor (`navgrid.floor_fill: observed`) and starts at the door in the back wall.
 - Current results on Equipment Room: 936 objects, 935 named by Gemini vision, a 3.2-unit collision-free walk to P-002.
 - Gemini models are tried in the order of `copilot.models`. On quota, overload or retired-model errors the next model is used. If all fail, the copilot shows the last good answer (marked as cached) or a template built from the same evidence.
+
+## Boundary repair (Nov 2026)
+
+LLM provider is Featherless (`Qwen/Qwen3.5-397B-A17B`, OpenAI-compatible, `copilot/llm.py`) with a hard paid-request cap and
+ledger (`llm_ledger.jsonl`), no automatic retries; `VALMET_OFFLINE=1` uses caches/templates only. Measured results,
+method and limitations: `review/RESULTS.md`. Tests: `python -m pytest -q tests`.
+The navigation target is a scene coordinate (`navgrid.target.point`), so OBJ id shifts between segmentation versions are safe.
