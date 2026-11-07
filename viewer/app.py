@@ -20,9 +20,11 @@ from copilot.agent import STATUS_DOT, diagnose, to_markdown
 from copilot.card import DETAIL_SECTIONS, asset_card, asset_details
 from copilot.evidence import build_evidence, load_pack
 from copilot.voice import briefing
+from pipeline.bim_provenance import ArtifactMismatch, compare, scene_revision
 from pipeline.common import ROOT, load_config, out_path, repo_path
 from pipeline.load_splat import covariances, load_splat
 from viewer.nudge import add_nudge_gui, floor_axes, gizmo_scale, up_vector
+from viewer import scene_edits as se
 
 Cfg = dict[str, Any]
 # Viser renders markdown tables as Mantine tables without borders; this <style> (injected once through an
@@ -295,14 +297,30 @@ class Sim:
                   f"{self.arrive_gap:.2f}")
         seg = np.load(out_path(cfg, "segment_points.npz"))     # for click picking on real points
         self.pick_xyz, self.pick_lab = seg["xyz"].astype(np.float64), seg["labels"]
+        self.revision = scene_revision(cfg, self.pick_lab)     # every derived artifact must match this
         self.selected: dict | None = None
         self.node_by_id = {n["id"]: n for n in self.nodes}
+        self.obj_index = {o["id"]: k for k, o in enumerate(self.sg["objects"])}
         self.movable: dict[str, dict] = {}           # objects in removable_rows.npz: own splat, can be edited
+        self.edit_note = ""                          # why editing is unavailable (shown in More)
+        self.movable_members: set[str] = set()       # editable objects + parts that move with them
         self.inst: dict[str, dict] = {}              # shown instances (originals + copies) by name
         self.sel_inst: str | None = None
         self._picked_inst: str | None = None
         self.show_movable = False
         self.gizmo: Any = None
+        self.edits: dict | None = None               # shared layout edits (viewer/scene_edits.py)
+        self._gizmo_dirty = False
+        self.tour0, self.path0 = self.tour, path     # unedited scene navigation (out/ files)
+        self._bounds0 = {n["id"]: {k: n[k] for k in ("bbox_min", "bbox_max", "center", "extent")} for n in self.nodes}
+        self.nav_inputs: tuple | None = None         # layout navigation (pipeline.layout_nav), None = out/ files
+        self._nav_layout = ""                        # layout hash the current navigation was built for
+        self.display = "Scan"                        # Scan | BIM | Overlay
+        self.bim: Any = None                         # viewer.bim_layer.BimLayer once loaded and validated
+        self.bim_note = "_BIM model loading…_"
+        self.h_bim: dict[str, Any] = {}              # static IFC meshes by object id
+        self._bim_tinted: str | None = None
+        self._group_vis = {g: cfg["viewer"]["display"].get(f"show_{g}", True) for g in ("room", "walls", "ceiling")}
         from api.annotate import free_port
         self.port = free_port(self.vc["port"])          # another viewer may already hold the configured port
         if self.port != self.vc["port"]:
@@ -313,6 +331,8 @@ class Sim:
         self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
+        self._restore_layout_nav()
+        threading.Thread(target=self._load_bim, daemon=True).start()
         self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
         self.h_corr_acc: list[Any] = []
         self.annot: Any = None
@@ -350,21 +370,59 @@ class Sim:
         self.h_splat: dict[str, Any] = {}
         self.sp_movable = np.zeros(len(x), bool)
         if self.vc["render_splats"]:
-            idx = {n["id"]: i for i, n in enumerate(self.sg["objects"])}
-            for oid, r in self.movable_rows(d["row_ids"]).items():
+            idx = self.obj_index
+            rows, parts = self.movable_rows(d["row_ids"])
+            for oid, r in rows.items():
                 self.sp_movable[r] = True
                 n = self.node_by_id[oid]
                 c = np.array(n["center"])
+                members = [oid, *parts.get(oid, [])]                   # attached parts move with it
+                pts = self.pick_xyz[np.isin(self.pick_lab, [idx[m] for m in members])]
+                lo, hi = (np.array(n["bbox_min"]), np.array(n["bbox_max"])) if len(members) == 1 else \
+                    (pts.min(0), pts.max(0))
                 self.movable[oid] = {"c": c, "xyz": x[r] - c, "rgb": d["rgb"][r], "op": self.sp["opacity"][r],
-                                     "cov": self.sp["cov"][r], "pick": self.pick_xyz[self.pick_lab == idx[oid]] - c,
-                                     "box": box_edges(np.array(n["bbox_min"]) - c, np.array(n["bbox_max"]) - c)}
+                                     "cov": self.sp["cov"][r], "pick": pts - c, "members": members,
+                                     "lo": lo - c, "hi": hi - c, "box": box_edges(lo - c, hi - c),
+                                     "bim": None}
+        self.movable_members = {m for v in self.movable.values() for m in v["members"]}
+        self._load_edit_state()
 
-    def movable_rows(self, row_ids: np.ndarray) -> dict[str, np.ndarray]:
-        p = out_path(self.cfg, "removable_rows.npz")
-        if not p.exists():
-            return {}
+    def movable_rows(self, row_ids: np.ndarray) -> tuple[dict[str, np.ndarray], dict[str, list[str]]]:
+        """Editable objects' splat rows, only when removable.json was built from this scene version."""
+        p, j = out_path(self.cfg, "removable_rows.npz"), out_path(self.cfg, "removable.json")
+        if not p.exists() or not j.exists():
+            self.edit_note = "No editable-object data for this scene (run `python -m viewer.removable`)."
+            return {}, {}
+        meta = json.loads(j.read_text(encoding="utf-8"))
+        errs = compare(meta.get("revision"), self.revision, "removable.json")
         z = np.load(p)
-        return {oid: np.searchsorted(row_ids, z[oid]) for oid in z.files if oid in self.node_by_id}
+        missing = [oid for oid in meta.get("removable", []) if oid not in z.files or oid not in self.node_by_id]
+        if errs or missing or set(z.files) != set(meta.get("removable", [])):
+            why = "; ".join(errs) or f"objects {missing} missing / removable_rows.npz does not match removable.json"
+            self.edit_note = f"Edit scene disabled: {why}. Regenerate with `python -m viewer.removable`."
+            print(f"[viewer] REJECTED editable-object data: {why}")
+            return {}, {}
+        return ({oid: np.searchsorted(row_ids, z[oid]) for oid in z.files},
+                {k: [m for m in v if m in self.node_by_id] for k, v in meta.get("parts", {}).items()})
+
+    def _load_edit_state(self) -> None:
+        """Shared layout edits for this scene version (migrating older files); a mismatch disables editing."""
+        if not self.movable:
+            return
+        pivots = {oid: m["c"] for oid, m in self.movable.items()}
+        try:
+            self.edits, notes = se.load(self.cfg, self.revision, pivots)
+        except ArtifactMismatch as e:
+            self.edit_note = f"Edit scene disabled: {e}. Move {se.FILE} aside to start a new edit history."
+            print(f"[viewer] REJECTED {se.FILE}: {e}")
+            self.sp_movable[:] = False
+            self.movable = {}
+            self.movable_members = set()
+            return
+        for msg in notes:
+            print(f"[viewer] {msg}")
+        self.base_layout = se.layout_hash(se.originals(pivots), pivots)
+        self._nav_layout = self.base_layout
 
     def rebuild_splats(self, dark_threshold: float, crop: bool) -> dict[str, int]:
         """(Re)send the three splat groups with the brightness / crop filter; keep their visibility."""
@@ -377,7 +435,7 @@ class Sim:
         for g in ("room", "walls", "ceiling"):
             m = keep & (self.sp_group == g) & ~self.sp_movable
             self._splat_group_rows[g] = np.flatnonzero(m)
-            vis = self.h_splat[g].visible if g in self.h_splat else self.vc["display"].get(f"show_{g}", True)
+            vis = self._group_vis[g] and self.display != "BIM"
             if self.vc["render_splats"]:
                 h = sc.add_gaussian_splats(f"/splat/{g}", centers=self.sp["xyz"][m], rgbs=self.sp["rgb"][m],
                                            opacities=self.sp["opacity"][m], covariances=self.sp["cov"][m])
@@ -395,26 +453,43 @@ class Sim:
         previous = getattr(self, "_visit_tint_id", None)
         if previous in getattr(self, "inst", {}):
             it = self.inst[previous]
-            it["h"].rgbs = self.movable[it["oid"]]["rgb"]
+            it.get("splat", it["h"]).rgbs = self.movable[it["oid"]]["rgb"]
         self._visit_tint_id = node["id"] if node else None
         self._refresh_visit_tint()
+
+    @staticmethod
+    def pale_of(n: dict) -> tuple[int, int, int]:
+        color, _ = visit_style(n)
+        return (185, 255, 200) if color[1] > color[0] else ((255, 190, 190) if color[0] > color[1] else (215, 220, 225))
+
+    def lookup(self, oid: str | None) -> dict | None:
+        """Scene object by id, or the identity-free node of a copy instance."""
+        if oid is None:
+            return None
+        by_id = getattr(self, "node_by_id", None) or {n["id"]: n for n in self.nodes}
+        if oid in by_id:
+            return by_id[oid]
+        if oid in getattr(self, "inst", {}):
+            return self.view_node(by_id[self.inst[oid]["oid"]], oid)
+        return None
 
     def _refresh_visit_tint(self) -> None:
         if not hasattr(self, "sp"):
             return
         oid = getattr(self, "_visit_tint_id", None)
-        n = next((n for n in self.nodes if n["id"] == oid), None)
+        n = self.lookup(oid)
         amount = float(np.clip(self.vc.get("visit_tint_strength", .1), 0, 1))
         target = None
+        label = -2
         if n is not None:
-            color, _ = visit_style(n)
-            pale = (185, 255, 200) if color[1] > color[0] else ((255, 190, 190) if color[0] > color[1] else (215, 220, 225))
-            target = np.array(pale, dtype=np.float32) / 255.0
+            target = np.array(self.pale_of(n), dtype=np.float32) / 255.0
             if not hasattr(self, "_splat_object_labels"):
                 distance, nearest = cKDTree(self.pick_xyz).query(self.sp["xyz"])
                 cutoff = float(self.cfg["label"]["member_dist"])
                 self._splat_object_labels = np.where(distance <= cutoff, self.pick_lab[nearest], -1)
-            label = next(i for i, a in enumerate(self.sg["objects"]) if a["id"] == oid)
+            index = getattr(self, "obj_index", None) or {o["id"]: k for k, o in enumerate(self.sg["objects"])}
+            label = index.get(n.get("copy_of", n["id"]), -2)
+        self._tint_bim(n, amount)
         for group, rows in getattr(self, "_splat_group_rows", {}).items():
             rgb = self.sp["rgb"][rows].copy()
             if target is not None:
@@ -428,14 +503,42 @@ class Sim:
         if target is not None and oid in getattr(self, "inst", {}):
             it = self.inst[oid]
             rgb = self.movable[it["oid"]]["rgb"]
-            it["h"].rgbs = (1 - amount) * rgb + amount * target
+            it.get("splat", it["h"]).rgbs = (1 - amount) * rgb + amount * target
+
+    def _bim_handle(self, oid: str | None) -> Any:
+        if oid is None:
+            return None
+        if oid in getattr(self, "inst", {}):
+            return self.inst[oid].get("bim")
+        return getattr(self, "h_bim", {}).get(oid)
+
+    def _bim_color(self, oid: str) -> tuple[int, int, int]:
+        src = self.inst[oid]["oid"] if oid in getattr(self, "inst", {}) else oid
+        bim = getattr(self, "bim", None)
+        return bim.mesh[src]["color"] if bim is not None and src in bim.mesh else (150, 150, 150)
+
+    def _tint_bim(self, n: dict | None, amount: float) -> None:
+        """BIM class colours stay underneath the health feedback: the highlighted object's mesh gets the same
+        light red/green tint as its splat (the strong outline is drawn on top in every display mode)."""
+        prev = getattr(self, "_bim_tinted", None)
+        h = self._bim_handle(prev)
+        if h is not None:
+            h.color = self._bim_color(prev)
+        self._bim_tinted = None
+        if n is None:
+            return
+        h = self._bim_handle(n["id"])
+        if h is not None:
+            base = np.array(self._bim_color(n["id"]), float)
+            h.color = tuple(int(v) for v in np.round((1 - amount) * base + amount * np.array(self.pale_of(n))))
+            self._bim_tinted = n["id"]
 
     # --- scene ---
     def _build_scene(self) -> None:
         sc = self.server.scene
         self._load_splat_groups()
         self.rebuild_splats(self.vc["display"]["dark_threshold"], self.vc["display"]["crop_outside_walls"])
-        segs, cols = edges_for([n for n in self.nodes if n["id"] not in self.movable], self.vc["colors"])
+        segs, cols = edges_for([n for n in self.nodes if n["id"] not in self.movable_members], self.vc["colors"])
         self.h_boxes = sc.add_line_segments("/boxes", segs, cols, thickness=self.vc["box_thickness"],
                                             thickness_units="screen")
         # before/after: baseline boxes (orange) and repaired objects (magenta = context, cyan = geometry)
@@ -475,7 +578,7 @@ class Sim:
                              for n in self.nodes]
         mode = self.vc["label_mode"]
         for oid in self.movable:
-            self.add_instance(oid, oid)
+            self.add_instance(oid, oid, removed=False)
         self.h_all_labels = [sc.add_label(f"/movable/{n['id']}/label" if n["id"] in self.movable else
                                           f"/all_labels/{n['id']}", label_text(n),
                                           position=((0.0, n["bbox_min"][1] - n["center"][1], 0.0) if n["id"] in self.movable
@@ -485,7 +588,7 @@ class Sim:
                                                              else self.vc["all_label_scale"]),
                                           visible=label_visible(mode, eq))
                              for n, eq in zip(self.nodes, self.is_equipment)]
-        self.load_edits()
+        self.sync_instances()
         self._build_avatar()
         sc.add_icosphere("/avatar/ring", radius=1.0, color=tuple(self.vc["avatar"]["ring_color"]),
                          opacity=0.15,
@@ -872,6 +975,11 @@ class Sim:
 
         @b_play.on_click
         def _(_e: Any) -> None:
+            why = self.nav_stale() or (getattr(self, "tour_note", "") if self.tour_route is None else "")
+            if why:                                   # never walk a route built for another layout
+                self.playing = False
+                self.md_stop.content = f"⚠️ {why}"
+                return
             if self.walk_mode != "tour":
                 self.set_walk_mode("tour")
             if self.dist >= self.s[-1]:
@@ -889,6 +997,9 @@ class Sim:
 
         @b_reset.on_click
         def _(_e: Any) -> None:
+            if self.nav_stale() or self.tour_route is None:
+                self.md_stop.content = f"⚠️ {self.nav_stale() or self.tour_note}"
+                return
             if self.walk_mode != "tour":
                 self.set_walk_mode("tour")
             self.playing, self.dist = False, 0.0
@@ -901,7 +1012,7 @@ class Sim:
 
         @self.sl_pos.on_update
         def _(_e: Any) -> None:
-            if not self.playing:
+            if not self.playing and not self.nav_stale():
                 self.dist = float(self.sl_pos.value)
                 self.next_stop = sum(s <= self.dist - 1e-6 for s in self.stop_s)   # scrubbing skips pauses
                 self.pause_until = self.pause_left = 0.0
@@ -914,6 +1025,13 @@ class Sim:
         g.add_markdown(f"**{c['objects']} objects** extracted · {c['structures']} structural planes · "
                        f"**{c['mapped']} mapped** to Excel")
         with g.add_folder("View"):
+            self.dd_display = g.add_dropdown(
+                "Display", ("Scan", "BIM", "Overlay"), initial_value="Scan",
+                hint="Scan: photoreal splats. BIM: the IFC model generated from this scan (scene.ifc). "
+                     "Overlay: splats plus BIM wireframes.")
+            self.md_bim = g.add_markdown(self.bim_note)
+            if self.edit_note:
+                g.add_markdown(f"<small>{self.edit_note}</small>")
             self.cb_pov = g.add_checkbox("Worker view (POV)", False,
                                          hint="See the room through the worker's eyes; turns with the worker. "
                                               "Switch off to get your own camera back.")
@@ -998,11 +1116,17 @@ class Sim:
 
         @cb_ceiling.on_update
         def _(_e: Any) -> None:
-            self.h_splat["ceiling"].visible = cb_ceiling.value
+            self._group_vis["ceiling"] = cb_ceiling.value
+            self.h_splat["ceiling"].visible = cb_ceiling.value and self.display != "BIM"
 
         @cb_walls.on_update
         def _(_e: Any) -> None:
-            self.h_splat["walls"].visible = cb_walls.value
+            self._group_vis["walls"] = cb_walls.value
+            self.h_splat["walls"].visible = cb_walls.value and self.display != "BIM"
+
+        @self.dd_display.on_update
+        def _(_e: Any) -> None:
+            self.set_display(self.dd_display.value)
 
         @b_apply.on_click
         def _(_e: Any) -> None:
@@ -1142,7 +1266,8 @@ class Sim:
         self.pose_avatar(p, moving=self.playing and self.dist < self.s[-1] and time.time() >= self.pause_until)
         r = float(self.sl_radius.value)
         idx = self.tree.query_ball_point(p[[0, 2]], r + self.max_half)
-        near_all = [self.nodes[i] for i in idx if self.box_gap(self.nodes[i], p) <= r]
+        near_all = [self.nodes[i] for i in idx if self.box_gap(self.nodes[i], p) <= r
+                    and not self.nodes[i].get("_layout_removed")]
         mapped = [n for n in near_all if n["asset"]]
         others = [n for n in near_all if not n["asset"]]
         # One health highlight at a time; nearby-object details remain available in the panels.
@@ -1164,7 +1289,7 @@ class Sim:
         """Release on departure, with hysteresis to avoid flicker at the proximity boundary."""
         if self.visit_active is None:
             return
-        n = next((n for n in self.nodes if n["id"] == self.visit_active["object_id"]), None)
+        n = self.lookup(self.visit_active["object_id"])
         radius = max(float(self.sl_radius.value), self.visit_arrival_gap)
         if n is None or self.box_gap(n, p) > radius + float(self.vc.get("visit_release_margin", .25)):
             self.clear_visit_highlight()
@@ -1205,8 +1330,21 @@ class Sim:
 
     # --- click to inspect ---
     def pick(self, origin: np.ndarray, direction: np.ndarray) -> dict | None:
-        """Object whose real (segmented) points the click ray hits first."""
+        """Object hit first by the click ray: its scan points (Scan), its IFC element (BIM) or either (Overlay).
+        Scan and BIM geometry of one object resolve to the same scene object."""
+        origin = np.asarray(origin, np.float64)
         d = direction / (np.linalg.norm(direction) + 1e-12)
+        best: tuple[float, Any, Any] = (np.inf, None, None)
+        if self.display in ("Scan", "Overlay") or self.bim is None:
+            best = self._pick_scan(origin, d)
+        if self.display in ("BIM", "Overlay") and self.bim is not None:
+            b = self._pick_bim(origin, d)
+            if b[0] < best[0]:
+                best = b
+        self._picked_inst = best[2]
+        return best[1]
+
+    def _pick_scan(self, origin: np.ndarray, d: np.ndarray) -> tuple[float, Any, Any]:
         v = self.pick_xyz - origin
         t = v @ d
         perp = np.linalg.norm(v - np.outer(t, d), axis=1)
@@ -1214,22 +1352,40 @@ class Sim:
         objs = self.sg["objects"]
         hit = (t > 0) & (perp < tol) & (self.pick_lab >= 0)
         hit &= np.array([objs[i]["kind"] == "object" for i in range(len(objs))])[np.maximum(self.pick_lab, 0)]
-        hit &= ~np.isin(self.pick_lab, [i for i, o in enumerate(objs) if o["id"] in self.movable])
+        hit &= ~np.isin(self.pick_lab, [self.obj_index[m] for m in self.movable_members])
         best = (float(t[hit].min()), objs[int(self.pick_lab[np.where(hit)[0][np.argmin(t[hit])]])], None) \
             if hit.any() else (np.inf, None, None)
         for name, it in self.inst.items():                    # movable objects where they are now
             if it["removed"]:
                 continue
-            R = SO3(np.asarray(it["h"].wxyz)).as_matrix()
-            o, dl = R.T @ (origin - np.asarray(it["h"].position)), R.T @ d
+            o, dl = self._to_local(name, origin, d)
             v = self.movable[it["oid"]]["pick"] - o
             t = v @ dl
             perp = np.linalg.norm(v - np.outer(t, dl), axis=1)
             ok = (t > 0) & (perp < self.vc["pick_radius"] + self.vc["pick_radius_per_unit"] * np.maximum(t, 0))
             if ok.any() and float(t[ok].min()) < best[0]:
                 best = (float(t[ok].min()), self.node_by_id[it["oid"]], name)
-        self._picked_inst = best[2]
-        return best[1]
+        return best
+
+    def _pick_bim(self, origin: np.ndarray, d: np.ndarray) -> tuple[float, Any, Any]:
+        from viewer.bim_layer import ray_hits
+        t, oid = self.bim.pick(origin, d, [o for o in self.bim.mesh if o not in self.movable_members])
+        best = (t, self.node_by_id.get(oid), None)
+        for name, it in self.inst.items():
+            m = self.movable[it["oid"]]
+            if it["removed"] or m["bim"] is None:
+                continue
+            o, dl = self._to_local(name, origin, d)
+            t = ray_hits(m["bim"][0].astype(np.float64), m["bim"][1], o, dl)
+            if t < best[0]:
+                best = (t, self.node_by_id[it["oid"]], name)
+        return best
+
+    def _to_local(self, name: str, origin: np.ndarray, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Ray in an instance's local frame (relative to its source object's pivot)."""
+        h = self.inst[name]["h"]
+        R = SO3(np.asarray(h.wxyz)).as_matrix()
+        return R.T @ (origin - np.asarray(h.position)), R.T @ d
 
     def on_scene_click(self, e: Any) -> None:
         n = self.pick(np.array(e.ray_origin), np.array(e.ray_direction))
@@ -1251,15 +1407,38 @@ class Sim:
         self.selection_highlight_id = n["id"]
         self._sync_visit_labels()
 
+    def view_node(self, n: dict, inst: str | None) -> dict:
+        """What a selection shows: the scene object, or for a copy an identity-free object at the copy's place
+        (copies never inherit the source's asset record, health or verified identity)."""
+        if inst is None or not getattr(self, "inst", {}).get(inst, {}).get("copy"):
+            return n
+        lo, hi = self.inst_bounds(inst)
+        return {**n, "id": inst, "asset": None, "copy_of": n["id"], "bbox_min": lo.tolist(), "bbox_max": hi.tolist(),
+                "center": ((lo + hi) / 2).tolist(), "extent": (hi - lo).tolist(), "label_source": "copy",
+                "label_reason": f"copy of {n['id']}; no asset identity", "repair": None, "fragments": None}
+
+    def bim_text(self, n: dict) -> str:
+        src = n.get("copy_of", n["id"])
+        if self.bim is None or src not in self.bim.mesh:
+            return ""
+        m = self.bim.mesh[src]
+        approx = {"scan mesh": "mesh of the scan points", "fitted cylinder": "fitted cylinder (DN-snapped)"}
+        how = approx.get(m["model_source"], m["model_source"] or "?")
+        return (f"\n\n**BIM:** `{m['cls']}` · {how}" + (" · approximate catalog shape" if "catalog" in how else "")
+                + (f" · GlobalId `{m['guid']}`" if "copy_of" not in n else " · copy (not in scene.ifc)"))
+
     def select(self, n: dict, inst: str | None = None) -> None:
-        self.selected = n
         self.sel_inst = inst if inst is not None or n["id"] not in self.movable else n["id"]
+        n = self.view_node(n, self.sel_inst)
+        self.selected = n
         self.hide_gizmo()
         if self.movable:
-            self.md_edit.content = (f"**{self.sel_inst}** selected." if self.sel_inst else
+            self.md_edit.content = ((f"**{self.sel_inst}** selected" + (f" (copy of {n['copy_of']}, no asset identity)."
+                                                                       if "copy_of" in n else "."))
+                                    if self.sel_inst else
                                     "_This object can't be edited; pick one of the movable objects._")
         self.mark_selected(n, self.inst_box(self.sel_inst) if self.sel_inst else None)
-        self.md_sel.content = selection_text(n, self.cfg["scene"]["units_to_m"])
+        self.md_sel.content = selection_text(n, self.cfg["scene"]["units_to_m"]) + self.bim_text(n)
         crop = out_path(self.cfg, "crops") / f"{n['id']}.png"
         if crop.exists():
             from PIL import Image
@@ -1274,9 +1453,11 @@ class Sim:
             self.choose_equipment(n["asset"]["tag"])
 
     # --- edit scene: move / remove / duplicate the objects that cut out cleanly (viewer.removable) ---
+    # One rigid transform per instance (frame /movable/<name>) carries its splat piece, BIM mesh, box, label and
+    # pick points; the layout lives in out/scene_edits.json (viewer/scene_edits.py), never in scene.ifc.
     def _build_edit_tab(self, g: Any) -> None:
-        g.add_markdown(f"**{len(self.movable)} objects** cut out cleanly and can be moved, removed or duplicated. "
-                       "Click one in the 3D view or pick it below.")
+        g.add_markdown(f"**{len(self.movable)} objects** cut out cleanly and can be moved, removed or duplicated "
+                       "(scan piece and BIM element together). Click one in the 3D view or pick it below.")
         dd = g.add_dropdown("Movable object", ["-", *self.movable], initial_value="-")
         cb_show = g.add_checkbox("Show movable objects", self.show_movable)
         self.md_edit = g.add_markdown("_Nothing selected._")
@@ -1288,10 +1469,20 @@ class Sim:
             units_to_m=self.cfg["scene"]["units_to_m"],
             on_nudge=self.nudge,
         )
-        b_dup = g.add_button("Duplicate", icon="copy")
+        b_dup = g.add_button("Duplicate", icon="copy", hint="The copy has no asset identity (no Excel record).")
         b_remove = g.add_button("Remove", icon="trash", color="red")
         b_restore = g.add_button("Restore object", hint="Put it back where it was and delete its copies")
+        b_undo = g.add_button("Undo", icon="arrow-back-up")
         b_restore_all = g.add_button("Restore all")
+        with g.add_folder("Layout and navigation"):
+            self.md_layout = g.add_markdown("")
+            b_apply = g.add_button("Apply layout", color="blue", icon="route",
+                                   hint="Rebuild occupancy, walk routes and the tour for the edited layout.")
+            g.add_markdown("<small>Edits are saved to `scene_edits.json` (visual layout); `scene.ifc` is not "
+                           "changed. An edited IFC is only written by the button below, as a separate file.</small>")
+            b_ifc = g.add_button("Export edited IFC (separate file)", icon="file-export")
+            self.md_ifc = g.add_markdown("")
+        self.update_layout_status()
 
         @dd.on_update
         def _(e: Any) -> None:
@@ -1314,61 +1505,95 @@ class Sim:
         @b_dup.on_click
         def _(_e: Any) -> None:
             if self.sel_inst:
-                src = self.inst[self.sel_inst]
-                oid = src["oid"]
-                k = 1 + max([int(x.rsplit("_copy", 1)[1]) for x in self.inst if x.startswith(oid + "_copy")] or [0])
-                name = f"{oid}_copy{k}"
-                self.add_instance(name, oid, np.asarray(src["h"].position) + np.array(self.vc["duplicate_offset"]),
-                                  src["h"].wxyz)
-                self.select(self.node_by_id[oid], inst=name)
-                self.show_gizmo(name)
-                self.save_edits()
+                self.duplicate(self.sel_inst)
 
         @b_remove.on_click
         def _(_e: Any) -> None:
             if self.sel_inst:
-                self.remove_selected()
+                self.remove_instance(self.sel_inst)
 
         @b_restore.on_click
         def _(_e: Any) -> None:
-            if self.selected is not None and self.selected["id"] in self.movable:
-                self.restore(self.selected["id"])
-                self.select(self.selected)
-                self.save_edits()
+            oid = (self.selected or {}).get("copy_of") or (self.selected or {}).get("id")
+            if oid in self.movable:
+                self.edit_action(f"restore {oid}", lambda: self.restore(oid))
+                self.select(self.node_by_id[oid])
+
+        @b_undo.on_click
+        def _(_e: Any) -> None:
+            self.undo_edit()
 
         @b_restore_all.on_click
         def _(_e: Any) -> None:
-            for oid in self.movable:
-                self.restore(oid)
+            self.edit_action("restore all", lambda: [self.restore(oid) for oid in list(self.movable)])
             self.hide_gizmo()
-            self.save_edits()
 
-    def add_instance(self, name: str, oid: str, pos: Any = None, wxyz: Any = (1.0, 0.0, 0.0, 0.0)) -> None:
-        """Frame at the object's pose holding its splat, box and label, so they move together."""
+        @b_apply.on_click
+        def _(_e: Any) -> None:
+            threading.Thread(target=self.apply_layout, daemon=True).start()
+
+        @b_ifc.on_click
+        def _(_e: Any) -> None:
+            threading.Thread(target=self.export_edited_ifc, daemon=True).start()
+
+    def add_instance(self, name: str, oid: str, pos: Any = None, wxyz: Any = (1.0, 0.0, 0.0, 0.0),
+                     removed: bool = False) -> None:
+        """Frame at the object's pose holding its splat, BIM mesh, box and label, so they move together."""
         m, sc = self.movable[oid], self.server.scene
         h = sc.add_frame(f"/movable/{name}", show_axes=False, position=tuple(m["c"] if pos is None else pos),
-                         wxyz=tuple(wxyz))
-        sc.add_gaussian_splats(f"/movable/{name}/splat", centers=m["xyz"], rgbs=m["rgb"], opacities=m["op"],
-                               covariances=m["cov"])
+                         wxyz=tuple(wxyz), visible=not removed)
+        splat = sc.add_gaussian_splats(f"/movable/{name}/splat", centers=m["xyz"], rgbs=m["rgb"], opacities=m["op"],
+                                       covariances=m["cov"], visible=self.display != "BIM")
         box = sc.add_line_segments(f"/movable/{name}/box", m["box"],
-                                   tuple(self.vc["colors"][status_of(self.node_by_id[oid])]),
+                                   tuple(self.vc["colors"][status_of(self.node_by_id[oid])] if name == oid
+                                         else self.vc["colors"]["no_record"]),
                                    thickness=self.vc["box_thickness"], thickness_units="screen",
-                                   visible=self.cb_boxes.value if hasattr(self, "cb_boxes") else True)
+                                   visible=self.cb_boxes.value if hasattr(self, "cb_boxes") else False)
         show = sc.add_line_segments(f"/movable/{name}/show", m["box"], tuple(self.vc["movable_color"]),
                                     thickness=self.vc["selected_thickness"], thickness_units="screen",
                                     visible=self.show_movable)
-        self.inst[name] = {"oid": oid, "h": h, "box": box, "show": show, "removed": False}
+        self.inst[name] = {"oid": oid, "h": h, "splat": splat, "box": box, "show": show, "bim": None,
+                           "removed": removed, "copy": name != oid}
+        self._add_instance_bim(name)
+
+    def _add_instance_bim(self, name: str) -> None:
+        it = self.inst[name]
+        m = self.movable[it["oid"]]
+        if self.bim is None or m["bim"] is None or (self.display == "Scan" and not self.h_bim):
+            return
+        it["bim"] = self.server.scene.add_mesh_simple(
+            f"/movable/{name}/bim", m["bim"][0], m["bim"][1].astype(np.uint32), color=self._bim_color(name),
+            wireframe=self.display == "Overlay", visible=self.display != "Scan")
 
     def inst_box(self, name: str) -> np.ndarray:
         h = self.inst[name]["h"]
         R = SO3(np.asarray(h.wxyz)).as_matrix()
         return (self.movable[self.inst[name]["oid"]]["box"] @ R.T + np.asarray(h.position)).astype(np.float32)
 
+    def inst_bounds(self, name: str) -> tuple[np.ndarray, np.ndarray]:
+        """Axis-aligned bounds of an instance as it is shown now (its points under the shared transform)."""
+        h, m = self.inst[name]["h"], self.movable[self.inst[name]["oid"]]
+        R = SO3(np.asarray(h.wxyz)).as_matrix()
+        P = m["pick"] @ R.T + np.asarray(h.position)
+        return P.min(0), P.max(0)
+
+    def live_bounds(self, n: dict) -> tuple[np.ndarray, np.ndarray]:
+        """Where an object is shown now: moved editable objects follow their instance; others their scan box."""
+        if n["id"] in self.inst and self._is_moved(n["id"]):
+            return self.inst_bounds(n["id"])
+        return np.array(n["bbox_min"]), np.array(n["bbox_max"])
+
+    def _is_moved(self, name: str) -> bool:
+        it = self.inst[name]
+        return it["copy"] or not (np.allclose(it["h"].position, self.movable[it["oid"]]["c"], atol=1e-4)
+                                  and np.allclose(it["h"].wxyz, (1, 0, 0, 0), atol=1e-5))
+
     def show_gizmo(self, name: str) -> None:
         h = self.inst[name]["h"]
         self.hide_gizmo()
         up = up_vector(self.cfg["scene"]["up_direction"])
         extent = float(np.ptp(self.movable[self.inst[name]["oid"]]["box"].reshape(-1, 3), 0).max())
+        self._gizmo_dirty = False
         self.gizmo = self.server.scene.add_transform_controls(
             "/gizmo", scale=gizmo_scale(extent=extent, vc=self.vc), line_width=self.vc.get("gizmo_line_width", 5.0),
             position=h.position, wxyz=h.wxyz, depth_test=False,
@@ -1377,9 +1602,21 @@ class Sim:
 
         @self.gizmo.on_update
         def _(_e: Any) -> None:
-            h.position, h.wxyz = self.gizmo.position, self.gizmo.wxyz
+            self.move_instance(name, self.gizmo.position, self.gizmo.wxyz)
+
+    def move_instance(self, name: str, position: Any, wxyz: Any) -> None:
+        """Gizmo drag (one undo step per Move): splat, BIM mesh, box, label and picking share this transform."""
+        if not self._gizmo_dirty:
+            se.push_history(self.edits, f"move {name}")
+            self._gizmo_dirty = True
+        h = self.inst[name]["h"]
+        h.position, h.wxyz = tuple(float(x) for x in position), tuple(float(x) for x in wxyz)
+        if self.sel_inst == name:
             self.h_selected.points = self.inst_box(name)
-            self.save_edits()
+        if self.visit_active is not None and self.visit_active["object_id"] == name:
+            self._draw_stop_box(self.lookup(name))
+        self.save_edits()
+        self.layout_changed()
 
     def nudge(self, dp: np.ndarray, yaw: float) -> None:
         """Step the selected object (Move / Lift / Turn buttons)."""
@@ -1388,24 +1625,12 @@ class Sim:
             return
         h = self.inst[name]["h"]
         up = up_vector(self.cfg["scene"]["up_direction"])
-        h.position = tuple(np.asarray(h.position) + dp)
-        h.wxyz = tuple((SO3.exp(up * yaw) @ SO3(np.asarray(h.wxyz))).wxyz)
+        position = np.asarray(h.position) + dp
+        wxyz = (SO3.exp(up * yaw) @ SO3(np.asarray(h.wxyz))).wxyz
+        self._gizmo_dirty = False
+        self.move_instance(name, position, wxyz)
         if self.gizmo is not None:
             self.gizmo.position, self.gizmo.wxyz = h.position, h.wxyz
-        self.h_selected.points = self.inst_box(name)
-        self.save_edits()
-
-    def remove_selected(self) -> None:
-        if self.sel_inst == self.inst[self.sel_inst]["oid"]:
-            self.inst[self.sel_inst]["removed"] = True
-            self.inst[self.sel_inst]["h"].visible = False
-        else:                                                   # a copy is deleted for good
-            self.inst.pop(self.sel_inst)["h"].remove()
-        self.md_edit.content = f"**{self.sel_inst}** removed."
-        self.sel_inst = None
-        self.hide_gizmo()
-        self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
-        self.save_edits()
 
     def edit_target(self, key: str) -> tuple[str | None, str]:
         """Editable instance for a chat / MCP edit: ''/'it' = the selection, else an object id, copy or label
@@ -1436,29 +1661,35 @@ class Sim:
 
     def edit_command(self, c: dict) -> dict:
         """move / turn / remove / restore an editable object (chat quick commands and MCP)."""
+        fields = ("degrees",) if c["cmd"] == "turn" else ("forward_m", "right_m", "up_m")
+        try:
+            values = {k: float(c.get(k, 0)) for k in fields}
+            if not all(np.isfinite(v) for v in values.values()):
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "message": "Movement amounts must be finite numbers."}
         name, why = self.edit_target(c.get("target", ""))
         if name is None:
             return {"ok": False, "message": why}
         cmd, oid = c["cmd"], self.inst[name]["oid"]
         label = f"{name} ({self.node_by_id[oid]['label']})"
         if cmd == "restore":
-            self.restore(oid)
+            self.edit_action(f"restore {oid}", lambda: self.restore(oid))
             self.select(self.node_by_id[oid])
-            self.save_edits()
             return {"ok": True, "message": f"{label} restored to its original place."}
         if self.inst[name]["removed"]:
             return {"ok": False, "message": f"{label} is removed; restore it first."}
         self.select(self.node_by_id[oid], inst=name)
         if cmd == "remove":
-            self.remove_selected()
+            self.remove_instance(name)
             return {"ok": True, "message": f"{label} removed."}
         if cmd == "turn":
-            deg = float(c.get("degrees") or 0)
+            deg = values["degrees"]
             self.nudge(np.zeros(3), np.radians(deg))
             return {"ok": True, "message": f"{label} turned {abs(deg):g}° {'left' if deg >= 0 else 'right'}."}
         up = up_vector(self.cfg["scene"]["up_direction"])
         f, r = floor_axes(client=next(iter(self.server.get_clients().values()), None), up=up)
-        d = {k: float(c.get(k) or 0) for k in ("forward_m", "right_m", "up_m")}
+        d = values
         self.nudge((d["forward_m"] * f + d["right_m"] * r + d["up_m"] * up) / self.cfg["scene"]["units_to_m"], 0.0)
         names = {"forward_m": ("forward", "back"), "right_m": ("right", "left"), "up_m": ("up", "down")}
         moved = ", ".join(f"{abs(v):g} m {names[k][v < 0]}" for k, v in d.items() if v) or "nowhere"
@@ -1468,6 +1699,33 @@ class Sim:
         if self.gizmo is not None:
             self.gizmo.remove()
             self.gizmo = None
+        self._gizmo_dirty = False
+
+    def duplicate(self, name: str) -> str:
+        src = self.inst[name]
+        oid = src["oid"]
+        k = 1 + max([int(x.rsplit("_copy", 1)[1]) for x in self.inst if x.startswith(oid + "_copy")] or [0])
+        new = f"{oid}_copy{k}"
+        self.edit_action(f"duplicate {name}", lambda: self.add_instance(
+            new, oid, np.asarray(src["h"].position) + np.array(self.vc["duplicate_offset"]), src["h"].wxyz))
+        self.select(self.node_by_id[oid], inst=new)
+        self.show_gizmo(new)
+        return new
+
+    def remove_instance(self, name: str) -> None:
+        def do() -> None:
+            if not self.inst[name]["copy"]:
+                self.inst[name]["removed"] = True
+                self.inst[name]["h"].visible = False
+            else:                                                       # a copy is deleted for good
+                self.inst.pop(name)["h"].remove()
+        if getattr(self, "_visit_tint_id", None) == name:
+            self.clear_visit_highlight()
+        self.edit_action(f"remove {name}", do)
+        self.md_edit.content = f"**{name}** removed."
+        self.sel_inst = None
+        self.hide_gizmo()
+        self.h_selected.points, self.h_selected.colors = edges_for([], self.vc["colors"])
 
     def restore(self, oid: str) -> None:
         for name in [x for x in self.inst if x.startswith(oid + "_copy")]:
@@ -1476,25 +1734,262 @@ class Sim:
         it["h"].position, it["h"].wxyz, it["h"].visible = tuple(self.movable[oid]["c"]), (1.0, 0.0, 0.0, 0.0), True
         it["removed"] = False
 
-    def save_edits(self) -> None:
-        out_path(self.cfg, "viewer_edits.json").write_text(json.dumps(
-            {name: {"oid": it["oid"], "position": [float(x) for x in it["h"].position],
-                    "wxyz": [float(x) for x in it["h"].wxyz], "removed": it["removed"]}
-             for name, it in self.inst.items()}, indent=1), encoding="utf-8")
+    def edit_action(self, action: str, fn: Any) -> None:
+        """Record the layout for undo, change it, save and invalidate navigation."""
+        self.hide_gizmo()
+        se.push_history(self.edits, action)
+        fn()
+        self.save_edits()
+        self.layout_changed()
 
-    def load_edits(self) -> None:
-        p = out_path(self.cfg, "viewer_edits.json")
-        if not p.exists():
+    def undo_edit(self) -> None:
+        self.hide_gizmo()
+        what = se.undo(self.edits)
+        if what is None:
+            self.md_edit.content = "_Nothing to undo._"
             return
-        for name, e in json.loads(p.read_text(encoding="utf-8")).items():
-            if e["oid"] not in self.movable:
-                continue
+        self.sync_instances()
+        self.save_edits()
+        self.layout_changed()
+        self.md_edit.content = f"Undid: {what}."
+
+    def sync_instances(self) -> None:
+        """Shown instances <- self.edits (startup, undo)."""
+        if self.edits is None:
+            return
+        want = self.edits["instances"]
+        for name in [x for x in self.inst if x not in want]:
+            self.inst.pop(name)["h"].remove()
+        for name, e in want.items():
             if name not in self.inst:
-                self.add_instance(name, e["oid"])
+                self.add_instance(name, e["source"])
             it = self.inst[name]
             it["h"].position, it["h"].wxyz = tuple(e["position"]), tuple(e["wxyz"])
             it["removed"] = e["removed"]
             it["h"].visible = not e["removed"]
+
+    def save_edits(self) -> None:
+        if self.edits is None:
+            return
+        self.edits["instances"] = {name: se.instance(it["oid"], self.movable[it["oid"]]["c"], it["copy"],
+                                                     it["h"].position, it["h"].wxyz, it["removed"])
+                                   for name, it in self.inst.items()}
+        se.save(self.cfg, self.edits)
+
+    # --- layout -> navigation (bounds, occupancy, routes, tour) ---
+    def layout_hash(self) -> str:
+        return se.layout_hash(self.edits["instances"], self.edits["pivots"]) if self.edits else ""
+
+    def nav_stale(self) -> str | None:
+        """Why walking must wait for Apply layout (None = navigation matches the shown layout)."""
+        if self.edits is None or self.layout_hash() == self._nav_layout:
+            return None
+        return ("The object layout changed: routes, occupancy and the tour are out of date. "
+                "Press **Edit scene → Apply layout** to rebuild navigation (or undo / restore the edits).")
+
+    def layout_changed(self) -> None:
+        """After any edit: stop walking on stale routes and hide them until Apply layout (or the edit is undone)."""
+        if self.edits is None:
+            return
+        cur = self.layout_hash()
+        applied = self.edits.get("applied_layout") or {}
+        if cur != self._nav_layout and cur == self.base_layout:
+            self._use_nav(None)                                         # back to the unedited scene
+        elif cur != self._nav_layout and cur == applied.get("hash"):    # back to the applied layout
+            res = self._try_build_nav(cur)
+            if res is not None:
+                self._use_nav(res)
+        why = self.nav_stale()
+        if why:
+            self.playing = False
+            self.h_path.visible = False
+            for h in self.h_tour_markers:
+                h.visible = False
+            self.md_walk.content = f"⚠️ {why}"
+            if self.tour:
+                self.md_stop.content = f"⚠️ {why}"
+        self.update_layout_status()
+
+    def update_layout_status(self) -> None:
+        if not hasattr(self, "md_layout") or self.edits is None:
+            return
+        n_moved = sum(self._is_moved(k) and not it["copy"] for k, it in self.inst.items())
+        n_copy = sum(it["copy"] for it in self.inst.values())
+        n_rem = sum(it["removed"] and not it["copy"] for it in self.inst.values())
+        why = self.nav_stale()
+        state = ("⚠️ **Navigation out of date**: walking is disabled until you press Apply layout." if why else
+                 "✅ Navigation matches this layout." + (" (rebuilt for the edited layout)" if self.nav_inputs else ""))
+        self.md_layout.content = (f"{n_moved} moved · {n_rem} removed · {n_copy} copies · "
+                                  f"{len(self.edits['history'])} undo steps  \n{state}"
+                                  + (f"  \n⚠️ {self.tour_note}" if getattr(self, "tour_note", "") else "")
+                                  + (f"  \n⚠️ {self.nav_error}" if why and getattr(self, "nav_error", "") else ""))
+
+    def _try_build_nav(self, layout: str) -> dict | None:
+        """_build_nav for the automatic rebuilds (edit callbacks, startup). On failure (missing / stale out/ files)
+        navigation stays marked out of date, so walking remains blocked and the reason is shown; the unedited
+        routes are not used, because they would be stale for this layout."""
+        try:
+            res = self._build_nav(layout)
+        except Exception as e:  # noqa: BLE001 - a broken rebuild must not stop the viewer or an edit
+            self.nav_error = f"Navigation rebuild failed ({type(e).__name__}: {e}); press Apply layout to retry."
+            print(f"[viewer] {self.nav_error}")
+            return None
+        self.nav_error = ""
+        return res
+
+    def _build_nav(self, layout: str) -> dict:
+        from pipeline.layout_nav import build
+        members = {oid: [self.obj_index[x] for x in m["members"]] for oid, m in self.movable.items()}
+        return build(self.cfg, self.edits, members, layout)
+
+    def apply_layout(self) -> None:
+        if self.edits is None:
+            return
+        cur = self.layout_hash()
+        if self.nav_stale() is None:
+            self.update_layout_status()
+            self.md_layout.content += "  \n_Already applied._"
+            return
+        self.md_layout.content = "_Rebuilding occupancy, routes and tour for the edited layout…_"
+        try:
+            res = None if cur == self.base_layout else self._build_nav(cur)
+        except Exception as e:  # noqa: BLE001
+            self.nav_error = f"Apply layout failed: {type(e).__name__}: {e}"
+            self.md_layout.content = f"⚠️ {self.nav_error}"
+            return
+        self.nav_error = ""
+        if self.layout_hash() != cur:                                   # edited again meanwhile
+            self.update_layout_status()
+            return
+        self.edits["applied_layout"] = None if res is None else {
+            "hash": cur, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "report": res["report"]}
+        self.save_edits()
+        self._use_nav(res)
+        if res is not None:
+            r = res["report"]
+            self.md_layout.content += (f"  \nObstacle cells {r['obstacle_cells_before']} → {r['obstacle_cells']}, "
+                                       f"walkable {r['walkable_cells_before']} → {r['walkable_cells']}; "
+                                       f"target {r['target']} {r['target_status']}.")
+
+    def _use_nav(self, res: dict | None) -> None:
+        """Switch bounds, planner, path and tour to a layout's navigation (None = the unedited out/ files)."""
+        from pipeline.tour import plan_tour
+        self.playing = False
+        if self.visit_active is not None:
+            self.clear_stop_highlight()
+        for n in self.nodes:                                            # bounds back to the scan, then the layout's
+            n.update(self._bounds0[n["id"]])
+            n.pop("_layout_removed", None)
+        self.nav_inputs = None if res is None else res["inputs"]
+        for oid, b in ({} if res is None else res["bounds"]).items():
+            if b["removed"]:
+                self.node_by_id[oid]["_layout_removed"] = True
+            else:
+                self.node_by_id[oid].update({k: b[k] for k in ("bbox_min", "bbox_max", "center", "extent")})
+        self.tree = cKDTree(np.array([n["center"] for n in self.nodes])[:, [0, 2]])
+        self.max_half = max(float(np.hypot(n["extent"][0], n["extent"][2])) / 2 for n in self.nodes)
+        self.planner = None
+        self.tour_note = ""
+        if res is None:
+            self.tour = self.tour0
+            route = (np.array((self.tour0 or self.path0)["points"], np.float64),
+                     list(self.tour0["stops"]) if self.tour0 else [])
+        else:
+            try:
+                t = plan_tour(self.cfg, inputs=res["inputs"])
+                self.tour, route = t, (np.asarray(t["points"], np.float64), t["stops"])
+            except Exception as e:  # noqa: BLE001 - target removed / unreachable: no tour in this layout
+                self.tour, route = None, None
+                self.tour_note = f"No inspection tour in this layout: {e}"
+        self._nav_layout = self.layout_hash() if self.edits else ""
+        self.tour_route = route
+        if route is not None:
+            self.stops = route[1]
+            self.walk_mode = "goto"                                     # force set_walk_mode to rebuild the route
+            self.set_walk_mode("tour")
+            self.draw_tour_markers()
+        self.h_path.visible = route is not None
+        self.md_walk.content = f"⚠️ {self.tour_note}" if self.tour_note else ""
+        self.update_layout_status()
+
+    def _restore_layout_nav(self) -> None:
+        """At startup: saved edits whose layout was applied get that navigation back (layout_changed rebuilds it,
+        guarded); unapplied edits, or a rebuild that fails, block walking until Apply layout."""
+        self.tour_note = self.nav_error = ""
+        if self.edits is None:
+            return
+        self._nav_layout = self.base_layout
+        self.layout_changed()
+
+    def export_edited_ifc(self) -> None:
+        from pipeline.ifc_edits import export_edited
+        if self.edits is None:
+            return
+        self.md_ifc.content = "_Writing scene_edited.ifc…_"
+        try:
+            r = export_edited(self.cfg, self.edits, {oid: m["members"] for oid, m in self.movable.items()})
+            self.md_ifc.content = (f"Wrote **{r['file']}** ({r['moved']} moved, {r['removed']} removed, "
+                                   f"{r['copies']} copies without asset data). `scene.ifc` is unchanged.")
+        except Exception as e:  # noqa: BLE001
+            self.md_ifc.content = f"⚠️ Edited IFC export failed: {type(e).__name__}: {e}"
+
+    # --- display modes: Scan / BIM / Overlay ---
+    def _load_bim(self) -> None:
+        """Validate and tessellate out/scene.ifc in the background; mismatched versions are rejected."""
+        try:
+            from viewer.bim_layer import BimLayer
+            layer = BimLayer(self.cfg, self.nodes, self.revision)
+        except Exception as e:  # noqa: BLE001 - the scan viewer works without BIM
+            self.bim_note = f"⚠️ **BIM unavailable:** {e}"
+            print(f"[viewer] BIM REJECTED: {e}")
+            if hasattr(self, "md_bim"):
+                self.md_bim.content = self.bim_note
+            return
+        for oid, m in self.movable.items():
+            v, f = layer.local(m["members"], m["c"])
+            m["bim"] = (v, f) if len(f) else None
+        self.bim = layer
+        self.bim_note = (f"BIM: **{len(layer.mesh)}** IFC elements from `scene.ifc` (segmentation "
+                         f"`{self.revision['segmentation']}`). Pipes are fitted cylinders, pumps/motors/valves "
+                         f"catalog shapes, the rest meshes of the scan points: approximate geometry.")
+        if hasattr(self, "md_bim"):
+            self.md_bim.content = self.bim_note
+        if self.display != "Scan":
+            self.set_display(self.display)
+
+    def _ensure_bim_handles(self) -> None:
+        if self.h_bim or self.bim is None:
+            return
+        sc = self.server.scene
+        for oid, m in self.bim.mesh.items():
+            if oid in self.movable_members:
+                continue
+            self.h_bim[oid] = sc.add_mesh_simple(f"/bim/{oid}", m["verts"].astype(np.float32),
+                                                 m["faces"].astype(np.uint32), color=m["color"], visible=False)
+
+    def set_display(self, mode: str) -> None:
+        if mode != "Scan" and self.bim is None:
+            if hasattr(self, "md_bim"):
+                self.md_bim.content = self.bim_note + ("  \n_Not loaded yet; try again in a moment._"
+                                                       if "loading" in self.bim_note else "")
+            if self.dd_display.value != "Scan":
+                self.dd_display.value = "Scan"
+            mode = "Scan"
+        self.display = mode
+        scan, bim = mode in ("Scan", "Overlay"), mode in ("BIM", "Overlay")
+        if bim:
+            self._ensure_bim_handles()
+        for g, h in self.h_splat.items():
+            h.visible = scan and self._group_vis[g]
+        for name, it in self.inst.items():
+            it["splat"].visible = scan
+            if it["bim"] is None and bim:
+                self._add_instance_bim(name)
+            if it["bim"] is not None:
+                it["bim"].visible, it["bim"].wireframe = bim, mode == "Overlay"
+        for h in self.h_bim.values():
+            h.visible, h.wireframe = bim, mode == "Overlay"
+        self._refresh_visit_tint()
 
     # --- worker point of view ---
     def set_pov(self, on: bool) -> None:
@@ -1866,9 +2361,9 @@ class Sim:
             return None, f"No asset or detected object called '{query}'."
         if not reachable:
             return cands[0], f"{len(cands)} '{cands[0]['label']}' object(s); showing the most confident."
-        if self.planner is None:
-            from pipeline.tour import WalkPlanner
-            self.planner = WalkPlanner(self.cfg)
+        if self.nav_stale():
+            return None, self.nav_stale()
+        self.get_planner()
         p, best = self.position(), None
         for n in cands:
             plan = self.planner.to_object(float(p[0]), float(p[2]), n)
@@ -1901,7 +2396,9 @@ class Sim:
             return {"ok": self.playing, "message": msg}
         if cmd == "tour":
             from pipeline.tour import plan_tour
-            t = plan_tour(self.cfg, list(c.get("stops") or []))
+            if self.nav_stale():
+                return {"ok": False, "message": self.nav_stale().replace("**", "")}
+            t = plan_tour(self.cfg, list(c.get("stops") or []), inputs=self.nav_inputs)
             self.tour, self.tour_route = t, (np.asarray(t["points"], np.float64), t["stops"])
             self.walk_mode = "goto"                       # force set_walk_mode to rebuild the tour route
             self.set_walk_mode("tour")
@@ -1914,6 +2411,13 @@ class Sim:
         if cmd in ("move", "turn", "remove", "restore"):
             return self.edit_command(c)
         return {"ok": False, "message": f"Unknown command '{cmd}'."}
+
+    def get_planner(self) -> Any:
+        """Walk planner on the navigation of the shown layout (out/ files, or the applied edited layout)."""
+        if self.planner is None:
+            from pipeline.tour import WalkPlanner
+            self.planner = WalkPlanner(self.cfg, inputs=self.nav_inputs)
+        return self.planner
 
     def draw_path(self) -> None:
         p = self.pts + np.array([0, -self.vc["path_lift"], 0])            # up = -y
@@ -1950,11 +2454,14 @@ class Sim:
 
     def go_to(self, node: dict) -> None:
         """Plan from the worker's current position to one object and start walking (Go to mode)."""
+        why = self.nav_stale()
+        if why or node.get("_layout_removed") or (node["id"] in self.inst and self.inst[node["id"]]["removed"]):
+            self.playing = False
+            self.md_walk.content = f"⚠️ {why or 'This object is removed in the current layout.'}"
+            return
         if self.walk_mode != "goto":
             self.set_walk_mode("goto")
-        if self.planner is None:
-            from pipeline.tour import WalkPlanner
-            self.planner = WalkPlanner(self.cfg)
+        self.get_planner()
         p = self.position()
         plan = self.planner.to_object(float(p[0]), float(p[2]), node)
         if not plan["ok"]:
@@ -1971,18 +2478,13 @@ class Sim:
 
     def highlight_stop(self, st: dict) -> None:
         """Solid health outline and a pale tint applied directly to the actual equipment."""
-        n = next(x for x in self.nodes if x["id"] == st["object_id"])
+        n = self.lookup(st["object_id"])
         self.clear_visit_highlight()
-        col, title = visit_style(n)
-        lo, hi = np.array(n["bbox_min"]), np.array(n["bbox_max"])
-        pad = self.vc.get("stop_outline_pad", .01)
-        segs = box_edges(lo - pad, hi + pad)
-        self.h_stop_box.points = segs
-        self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
-        self.h_stop_box.visible = True
+        _, title = visit_style(n)
+        lo, hi = self._draw_stop_box(n)
         self.h_stop_label = self.server.scene.add_label(
             "/stop/label", title,
-            position=(float(n["center"][0]), float(lo[1]) - 0.15, float(n["center"][2])),
+            position=(float((lo[0] + hi[0]) / 2), float(lo[1]) - 0.15, float((lo[2] + hi[2]) / 2)),
             anchor="bottom-center", font_screen_scale=self.vc["stop_label_scale"])
         self.stop_active = st
         self.visit_active = st
@@ -1992,6 +2494,19 @@ class Sim:
         self._sync_visit_labels()
         self.face_target = np.array(n["center"], np.float64)
         self.pose_avatar(self.position(), moving=False)
+
+    def _draw_stop_box(self, n: dict) -> tuple[np.ndarray, np.ndarray]:
+        """Strong red/green outline around the object where it is shown now (follows a moved object)."""
+        col, title = visit_style(n)
+        lo, hi = self.live_bounds(n) if n["id"] in getattr(self, "inst", {}) else             (np.array(n["bbox_min"]), np.array(n["bbox_max"]))
+        pad = self.vc.get("stop_outline_pad", .01)
+        segs = box_edges(lo - pad, hi + pad)
+        self.h_stop_box.points = segs
+        self.h_stop_box.colors = np.tile(np.array(col, np.uint8), (len(segs), 2, 1))
+        self.h_stop_box.visible = True
+        if self.h_stop_label is not None:
+            self.h_stop_label.position = (float((lo[0] + hi[0]) / 2), float(lo[1]) - 0.15, float((lo[2] + hi[2]) / 2))
+        return lo, hi
 
     def blink_stop(self, now: float) -> None:
         # Existing playback callbacks use this hook; the health highlight is now steady.

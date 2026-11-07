@@ -61,8 +61,9 @@ def label_target(text: str, labels: list[str] | None) -> tuple[str, str] | None:
     return None
 
 
-EDIT_TARGET_RE = re.compile(r"\b(?:it|this|that)\b")
-STEP_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(cm|mm|m|meters?|metres?)?\s+(?:to the\s+)?"
+EDIT_TARGET = r"(?:OBJ-\d{4}(?:_copy\d+)?|ASSET-\d{3}|[A-Z]{1,3}-\d{3}|it|this|that)"
+AMOUNT = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"
+STEP_RE = re.compile(rf"({AMOUNT})\s*(cm|mm|m|meters?|metres?)?\s+(?:to the\s+)?"
                      r"(left|right|forwards?|backwards?|back|up|down)\b")
 STEP_AXIS = {"left": ("right_m", -1), "right": ("right_m", 1), "forward": ("forward_m", 1),
              "forwards": ("forward_m", 1), "back": ("forward_m", -1), "backward": ("forward_m", -1),
@@ -73,31 +74,34 @@ UNIT_M = {"cm": 0.01, "mm": 0.001}
 def parse_edit(text: str) -> dict | None:
     """'move OBJ-0269 0.5 m left', 'turn it 30 degrees right', 'remove OBJ-0269', 'restore it'.
     Only for one object id or 'it' (the selection); labels and qualifiers ('the green chair') go to Claude."""
-    tags = tags_in(text)
-    t = TAG_RE.sub(" ", text.strip().lower())                   # digits of the id must not read as amounts
-    if len(tags) > 1 or (not tags and not EDIT_TARGET_RE.search(t)):
+    t = text.strip().rstrip(".!?").strip()
+    put_back = re.fullmatch(rf"put\s+({EDIT_TARGET})\s+back", t, re.I)
+    if put_back:
+        t = "restore " + put_back.group(1)
+    m = re.fullmatch(rf"(remove|delete|restore|turn|rotate|spin|move|shift|push|slide|nudge)\s+"
+                     rf"({EDIT_TARGET})(?:\s+(.*))?", t, re.I)
+    if not m:
         return None
-    target = tags[0] if tags else ""
-    if re.match(r"\s*(?:remove|delete)\b", t):
-        return {"cmd": "remove", "target": target}
-    if re.match(r"\s*(?:restore|put (?:it |this |that )?back)\b", t):
-        return {"cmd": "restore", "target": target}
-    if re.match(r"\s*(?:turn|rotate|spin)\b", t):
-        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:°|deg|degrees?)?", t)
+    verb, target, tail = m.group(1).lower(), m.group(2), (m.group(3) or "").lower()
+    target = "" if target.lower() in ("it", "this", "that") else target.upper().replace("_COPY", "_copy")
+    if verb in ("remove", "delete", "restore"):
+        return {"cmd": "restore" if verb == "restore" else "remove", "target": target} if not tail else None
+    if verb in ("turn", "rotate", "spin"):
+        m = re.fullmatch(rf"({AMOUNT})\s*(?:°|deg|degrees?)?\s*"
+                         r"(left|right|clockwise|counterclockwise|counter-clockwise|anticlockwise)?", tail)
         if not m:
             return None
-        right = re.search(r"\bright\b", t) or (re.search(r"clockwise", t) and not re.search(r"counter|anti", t))
+        right = m.group(2) in ("right", "clockwise")
         return {"cmd": "turn", "target": target, "degrees": -float(m.group(1)) if right else float(m.group(1))}
-    if re.match(r"\s*(?:move|shift|push|slide|nudge)\b", t):
-        steps = STEP_RE.findall(t)
-        if not steps:
-            return None
-        q = {"cmd": "move", "target": target, "forward_m": 0.0, "right_m": 0.0, "up_m": 0.0}
-        for amount, unit, direction in steps:
-            axis, sign = STEP_AXIS[direction]
-            q[axis] += sign * float(amount) * UNIT_M.get(unit, 1.0)
-        return q
-    return None
+    steps = [STEP_RE.fullmatch(part) for part in re.split(r"\s*(?:,|\band\b)\s*", tail)]
+    if not all(steps):
+        return None
+    q = {"cmd": "move", "target": target, "forward_m": 0.0, "right_m": 0.0, "up_m": 0.0}
+    for step in steps:
+        amount, unit, direction = step.groups()
+        axis, sign = STEP_AXIS[direction]
+        q[axis] += sign * float(amount) * UNIT_M.get(unit, 1.0)
+    return q
 
 
 def parse_quick(text: str, labels: list[str] | None = None) -> dict | None:
