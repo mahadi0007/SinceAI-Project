@@ -86,7 +86,9 @@ def object_panels(a: dict, idx: int, xyz: np.ndarray, rgb: np.ndarray, lab: np.n
     side = raster(P, Cc, 2, 1, 0, True, (lo - pad)[[2, 1]], (hi + pad)[[2, 1]], px, sp, bg)
     mg = lc["context_margin"]
     clo, chi = lo - mg, hi + mg
-    inwin = ((xyz[:, 0] >= clo[0]) & (xyz[:, 0] <= chi[0]) & (xyz[:, 1] >= clo[1]) & (xyz[:, 1] <= chi[1]))
+    dz = lc["context_depth"]               # only the object's depth slab, not the whole room behind it
+    inwin = ((xyz[:, 0] >= clo[0]) & (xyz[:, 0] <= chi[0]) & (xyz[:, 1] >= clo[1]) & (xyz[:, 1] <= chi[1])
+             & (xyz[:, 2] >= lo[2] - dz) & (xyz[:, 2] <= hi[2] + dz))
     ctx = raster(xyz[inwin], rgb[inwin], 0, 1, 2, True, clo[[0, 1]], chi[[0, 1]], px, max(sp - 1, 1), bg)
     span = max(chi[0] - clo[0], chi[1] - clo[1]) * 1.08
     cc = (clo[[0, 1]] + chi[[0, 1]]) / 2
@@ -251,6 +253,8 @@ def run(cfg: Cfg, rules_only: bool = False) -> list[dict]:
     cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.exists() else {}
     sig = {a["id"]: f"{a['n_points']}|{np.round(a['center'], 3).tolist()}" for a in assets}
     todo = [a for a in assets if a["kind"] == "object" and cache.get(a["id"], {}).get("sig") != sig[a["id"]]]
+    # most informative first (equipment/valves/unnamed, then big pipes) so a quota cut-off hurts least
+    todo.sort(key=lambda a: (a["hint"] == "pipe segment", -a["n_points"]))
     if not rules_only and todo:
         batches = [todo[k:k + lc["batch_size"]] for k in range(0, len(todo), lc["batch_size"])]
         t0 = time.time()

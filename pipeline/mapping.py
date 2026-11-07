@@ -90,6 +90,12 @@ class Mapper:
         lo, hi = self.mc["confidence"][key]
         return round(float(self.rng.uniform(lo, hi)), 2)
 
+    def label_conf(self, obj: Obj) -> float:
+        """Label-match confidence follows the VLM's own confidence, bounded by the tier range."""
+        lo = self.mc["confidence"]["geometry_rule"][0]
+        hi = self.mc["confidence"]["label_match"][1]
+        return round(float(np.clip(obj.get("label_confidence", lo), lo, hi)), 2)
+
     def assign(self, asset_id: str, obj_id: str, method: str, conf: float, evidence: str) -> None:
         self.used[obj_id] = asset_id
         self.result[asset_id] = {"object_id": obj_id, "mapping_method": method,
@@ -114,7 +120,7 @@ class Mapper:
         cands = self.free(lambda o: o.get("label") in labels and o.get("label_source") == "gemini_vision")
         if cands:
             k = self.pick(cands, near)
-            self.assign(aid, k, "label_match", self._conf("label_match"),
+            self.assign(aid, k, "label_match", self.label_conf(self.objs[k]),
                         f"VLM label '{self.objs[k]['label']}' matches {cls}")
             return
         r = self.mc["geometry"][rule["geometry"]]
@@ -143,7 +149,7 @@ def run_mapping(xl: dict[str, pd.DataFrame], objs: list[Obj], path: dict, mc: Cf
     tobj = m.objs[path["target_object"]]
     if (tobj.get("label") in mc["class_rules"][target["asset_class"]]["labels"]
             and tobj.get("label_source") == "gemini_vision"):
-        m.assign(target["asset_id"], tobj["id"], "label_match_navigation_target", m._conf("label_match"),
+        m.assign(target["asset_id"], tobj["id"], "label_match_navigation_target", m.label_conf(tobj),
                  f"navigation target; VLM label '{tobj['label']}' ({tobj['label_confidence']}) "
                  f"matches {target['asset_class']}")
     else:

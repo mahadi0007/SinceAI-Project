@@ -28,7 +28,9 @@ cp .env.example .env            # put your GEMINI_API_KEY in .env
 ```
 
 Put the challenge files in `data/` (not in git):
-`data/boiler_room.ply` and `data/builder_pack.xlsx`.
+`data/Equipment Room.ply` (full, uncorrupted scan) and `data/builder_pack.xlsx`.
+The older `boiler_room.ply` is the same room but only the back strip (2/3 of its rows are corrupted);
+it still works by switching `paths.ply` and the `scene`/`known_planes` values in `config.yaml`.
 
 ## Run
 
@@ -43,7 +45,9 @@ python -m viewer.app            # open http://localhost:8080 and press Play
 
 ## Notes
 
-- The `.ply` file is corrupted after row ~502k. `pipeline/load_splat.py` reads only the valid part.
-- The up axis is −Y (floor y ≈ 1.075). Native coordinates are kept, and the walking plane is x–z.
-- The scan has no floor for x > 0.5, so `navgrid.floor_fill: footprint` assumes the floor continues under the scanned area.
+- `pipeline/load_splat.py` detects and drops corrupted rows (needed for `boiler_room.ply`; `Equipment Room.ply` is clean).
+- The up axis is −Y (Equipment Room: floor y = 1.174, ceiling y = −0.863, walls at x = −4.67 / 3.73, z = −3.76 / 3.14).
+  Native coordinates are kept, and the walking plane is x–z.
+- Navigation uses the observed floor (`navgrid.floor_fill: observed`) and starts at the door in the back wall.
+- Current results on Equipment Room: 936 objects, 935 named by Gemini vision, a 3.2-unit collision-free walk to P-002.
 - Gemini models are tried in the order of `copilot.models`. On quota, overload or retired-model errors the next model is used. If all fail, the copilot shows the last good answer (marked as cached) or a template built from the same evidence.

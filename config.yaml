@@ -1,14 +1,14 @@
 # All tunable values. Paths are relative to the repo root.
 paths:
-  ply: data/boiler_room.ply
+  ply: data/Equipment Room.ply     # full, uncorrupted capture (old: data/boiler_room.ply = back strip only)
   xlsx: data/builder_pack.xlsx
   out_dir: out
 
-scene:
+scene:                    # measured on Equipment Room.ply (histogram peaks + RANSAC floor fit)
   up_direction: "-y"
-  floor_y: 1.075          # native y of floor plane (up is -y)
-  ceiling_y: -0.889
-  back_wall_z: -3.445
+  floor_y: 1.174          # native y of floor plane (up is -y); tilt < 0.4 deg
+  ceiling_y: -0.863
+  back_wall_z: -3.758     # wall with the door
   units_to_m: 1.15        # ~1 unit = 1.1-1.2 m (from door height)
 
 load:
@@ -25,9 +25,12 @@ segment:
   opacity_knn: 4          # original splats averaged for a voxel point's opacity
   plane_normal_dot: 0.8   # structural plane point needs |normal . axis| > this
   known_planes:           # axis-aligned structural planes removed first, kept as assets
-    - {name: floor,     label: floor, axis: 1, value: 1.075,  tol: 0.05}
-    - {name: ceiling,   label: ceiling, axis: 1, value: -0.889, tol: 0.05}
-    - {name: back_wall, label: wall,  axis: 2, value: -3.445, tol: 0.05}
+    - {name: floor,      label: floor,   axis: 1, value: 1.174,  tol: 0.05}
+    - {name: ceiling,    label: ceiling, axis: 1, value: -0.863, tol: 0.05}
+    - {name: back_wall,  label: wall,    axis: 2, value: -3.758, tol: 0.05}
+    - {name: front_wall, label: wall,    axis: 2, value: 3.137,  tol: 0.05}
+    - {name: left_wall,  label: wall,    axis: 0, value: -4.673, tol: 0.05}
+    - {name: right_wall, label: wall,    axis: 0, value: 3.732,  tol: 0.05}
   ransac:
     dist: 0.02
     n: 3
@@ -72,7 +75,7 @@ plots:
   structure_color: [0.75, 0.75, 0.75]
 
 label:
-  batch_size: 24            # objects per Gemini call (free tier: ~20 requests/day/model)
+  batch_size: 30            # objects per Gemini call (free tier: ~20 requests/day/model)
   workers: 2                # parallel calls; models come from copilot.models (fallback chain)
   min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
   rules_conf: 0.4
@@ -81,6 +84,7 @@ label:
   send_px: 224              # panel size sent to Gemini
   splat_px: 2               # point radius in px
   context_margin: 0.6
+  context_depth: 0.5        # context panel shows only points within this depth of the object
   background: [235, 235, 235]
   thumb_px: 128
   sheet_cols: 16
@@ -92,17 +96,17 @@ navgrid:
   cell: 0.05
   pad_cells: 2
   floor_dilate: 2
-  floor_fill: footprint   # footprint = assume floor under whole scan (no floor points for x > 0.5) | observed = spec
+  floor_fill: observed    # observed = spec (floor visible everywhere in Equipment Room) | footprint = assume floor under scan
   footprint_close: 4      # closing iterations for the footprint fill
   obstacle_min_h: 0.10
   obstacle_max_h: 1.80
   obstacle_min_points: 2  # points per cell to count as obstacle (ignores lone floaters)
   avatar_radius: 0.25
-  start: null             # [x, z] or null = auto
+  start: [0.0, -3.3]      # [x, z] just inside the door in the back wall; null = auto
   auto_start: max_x       # max_x = right end of the strip | min_x | min_z (doorway)
   resample: 0.05
   target:                 # object the faulty asset (P-002) will be placed on
-    object_id: null       # e.g. OBJ-0042, or null = auto (farthest reachable pump-sized object)
+    object_id: OBJ-0269   # floor pump at the location verified as "pump" (0.9) in the first scan; null = auto
     prefer_labels: [pump] # if label.py found reachable objects with these labels, pick among them
     prefer_min_conf: 0.8  # only confidently labelled pumps
     label_reach: 1.2      # approach distance allowed for labelled targets (equipment sits in crowded corners)
@@ -208,7 +212,7 @@ evidence:
 
 copilot:
   # tried in order; on quota (429) / overload (503) / retired (404) the next one is used
-  models: [gemini-3.8-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-2.5-flash]
+  models: [gemini-3.8-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-2.5-flash, gemma-4-31b-it]
   dead_model_skip_s: 600        # skip a quota-exhausted/retired model for this long
   temperature: 0.2
   expected_latency_s: 22        # drives the viewer's progress bar
