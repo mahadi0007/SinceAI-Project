@@ -1,0 +1,13 @@
+numpy
+pandas
+openpyxl
+open3d
+scikit-learn
+scipy
+viser
+fastapi
+uvicorn
+google-genai
+pyyaml
+matplotlib
+python-dotenv

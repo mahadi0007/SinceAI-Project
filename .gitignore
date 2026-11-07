@@ -1,0 +1,9 @@
+data/
+out/
+.venv/
+.env
+__pycache__/
+*.pyc
+
+# challenge partner documents
+*.docx

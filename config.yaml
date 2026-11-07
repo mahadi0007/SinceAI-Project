@@ -1,0 +1,215 @@
+# All tunable values. Paths are relative to the repo root.
+paths:
+  ply: data/boiler_room.ply
+  xlsx: data/builder_pack.xlsx
+  out_dir: out
+
+scene:
+  up_direction: "-y"
+  floor_y: 1.075          # native y of floor plane (up is -y)
+  ceiling_y: -0.889
+  back_wall_z: -3.445
+  units_to_m: 1.15        # ~1 unit = 1.1-1.2 m (from door height)
+
+load:
+  min_opacity: 0.1
+  max_scale: 0.3
+  crop_floaters: true
+
+segment:
+  seed: 0
+  voxel: 0.02
+  outlier_nb: 20
+  outlier_std: 2.0
+  normal_knn: 16          # neighbours for normal estimation
+  opacity_knn: 4          # original splats averaged for a voxel point's opacity
+  plane_normal_dot: 0.8   # structural plane point needs |normal . axis| > this
+  known_planes:           # axis-aligned structural planes removed first, kept as assets
+    - {name: floor,     label: floor, axis: 1, value: 1.075,  tol: 0.05}
+    - {name: ceiling,   label: ceiling, axis: 1, value: -0.889, tol: 0.05}
+    - {name: back_wall, label: wall,  axis: 2, value: -3.445, tol: 0.05}
+  ransac:
+    dist: 0.02
+    n: 3
+    iters: 2000
+    min_frac: 0.05        # plane must hold > this fraction of remaining points
+    max_planes: 4
+    component_eps: 0.06   # keep only connected plane patches
+    component_min_frac: 0.02
+  dbscan:
+    eps: 0.045
+    min_points: 6         # 12 dropped 34% of points (sparse pipe network)
+  min_cluster_points: 60
+  noise_reassign_dist: 0.06   # noise -> nearest cluster only within this distance
+  contain_tol: 0.02           # box-in-box tolerance for merging same-class objects
+  collinear:                  # re-join pipe pieces broken at junctions
+    min_cross_overlap: 0.5    # cross-section overlap / smaller cross-section
+    max_gap: 0.15             # gap along the pipe axis
+  overhead:                   # clusters above the ceiling plane
+    min_points: 60
+    min_opacity: 0.3
+    margin: 0.15          # filter applies only to clusters entirely this far above the ceiling
+  split:
+    max_diag: 1.5         # cluster is "oversized" above this bbox diagonal ...
+    max_points: 5000      # ... or above this many points
+    # direction-class split: pipe runs along x/y/z vs non-linear (fittings, equipment)
+    pca_knn: 24           # local PCA neighbourhood (points and normals)
+    lin_thresh: 0.5       # point-PCA linearity -> pipe-like
+    cyl_thresh: 0.25      # normal-scatter cylindricity -> pipe-like
+    axis_align: 0.85      # |axis component| needed to count as x/y/z aligned
+    smooth_knn: 20        # majority vote over neighbours to remove speckle
+    class_eps: 0.045
+    class_min_points: 6
+    min_part_points: 40
+    fitting_max_diag: 0.6 # non-linear part this small -> "fitting/valve"
+  pipe_linearity: 0.9
+
+plots:
+  dpi: 160
+  point_size: 0.3
+  max_points: 200000
+  noise_color: [0.45, 0.0, 0.0]
+  structure_color: [0.75, 0.75, 0.75]
+
+label:
+  batch_size: 24            # objects per Gemini call (free tier: ~20 requests/day/model)
+  workers: 2                # parallel calls; models come from copilot.models (fallback chain)
+  min_conf: 0.45            # below this -> geometry-rule label (Gemini guess kept as label_vlm)
+  rules_conf: 0.4
+  member_dist: 0.03         # full-res splat point -> object if within this of a segmented point
+  panel_px: 320             # saved crop panel size
+  send_px: 224              # panel size sent to Gemini
+  splat_px: 2               # point radius in px
+  context_margin: 0.6
+  background: [235, 235, 235]
+  thumb_px: 128
+  sheet_cols: 16
+  vocab: [pump, motor, control valve, manual valve/handwheel, pressure transmitter/gauge, vibration sensor,
+          pipe segment, pipe fitting/flange, tank/vessel, electrical cabinet, cable tray, ladder/stairs,
+          cage/rack, handrail/railing, door, sign, box/crate, trolley, light fixture, duct, wall, floor, other]
+
+navgrid:
+  cell: 0.05
+  pad_cells: 2
+  floor_dilate: 2
+  floor_fill: footprint   # footprint = assume floor under whole scan (no floor points for x > 0.5) | observed = spec
+  footprint_close: 4      # closing iterations for the footprint fill
+  obstacle_min_h: 0.10
+  obstacle_max_h: 1.80
+  obstacle_min_points: 2  # points per cell to count as obstacle (ignores lone floaters)
+  avatar_radius: 0.25
+  start: null             # [x, z] or null = auto
+  auto_start: max_x       # max_x = right end of the strip | min_x | min_z (doorway)
+  resample: 0.05
+  target:                 # object the faulty asset (P-002) will be placed on
+    object_id: null       # e.g. OBJ-0042, or null = auto (farthest reachable pump-sized object)
+    prefer_labels: [pump] # if label.py found reachable objects with these labels, pick among them
+    prefer_min_conf: 0.8  # only confidently labelled pumps
+    label_reach: 1.2      # approach distance allowed for labelled targets (equipment sits in crowded corners)
+    min_points: 150
+    max_height_bottom: 0.3
+    max_extent: 1.2
+    reach: 0.6            # approach cell must be within this of the object's box
+
+mapping:
+  seed: 42
+  target_tag: P-002
+  target_asset_id: ASSET-014
+  confidence:
+    label_match: [0.8, 0.9]       # VLM label agrees with asset class
+    geometry_rule: [0.55, 0.7]    # segment hint / shape rule only (no VLM yet)
+    random_fallback: [0.3, 0.5]
+    forced_demo_target: 0.5       # P-002 placed on the navigation target object
+  near_path_pool: 0.5             # random picks come from the nearest half of candidates
+  near_path_tags: [P-005, M-006, CV-003, VS-002]   # degraded/attention assets placed right by the path
+  class_order: [PROCESS_PUMP, ELECTRIC_MOTOR, CONTROL_VALVE, PRESSURE_TRANSMITTER, VIBRATION_SENSOR]
+  sensor_classes: [VIBRATION_SENSOR]
+  sensor_hosts: [PROCESS_PUMP, ELECTRIC_MOTOR]
+  class_rules:
+    PROCESS_PUMP:         {labels: [pump], geometry: equipment}
+    ELECTRIC_MOTOR:       {labels: [motor], geometry: equipment}
+    CONTROL_VALVE:        {labels: [control valve], geometry: valve}
+    PRESSURE_TRANSMITTER: {labels: [pressure transmitter/gauge, gauge], geometry: small}
+    VIBRATION_SENSOR:     {labels: [vibration sensor], geometry: small}
+  geometry:
+    equipment: {max_height_bottom: 0.4, min_points: 100, max_extent: 1.2}
+    valve:     {max_diag: 0.6}
+    small:     {max_diag: 0.35, min_points: 40}
+
+viewer:
+  port: 8080
+  proximity_radius: 1.6     # distance avatar -> object box (x-z)
+  walk_speed: 0.5           # units/s (path is ~4.3 units -> ~9 s walk)
+  fps: 20
+  render_splats: true       # false = plain point cloud (faster on weak GPUs)
+  point_size: 0.01
+  box_thickness: 1.0        # screen px, all frames
+  highlight_thickness: 3.5  # screen px, frames near the avatar
+  path_lift: 0.02
+  all_label_scale: 0.6      # font scale for "Show all labels"
+  other_label_scale: 0.75   # font scale for nearby objects without asset record
+  near_label_skip: [pipe segment, pipe fitting/flange, other, wall]   # too many to label while walking
+  pick_radius: 0.03         # click ray tolerance (units) ...
+  pick_radius_per_unit: 0.01  # ... growing with distance
+  selected_color: [255, 0, 255]
+  selected_thickness: 5.0
+  fly_min_dist: 1.0
+  fly_dist_factor: 2.0
+  fly_height: 0.3
+  path_color: [220, 20, 60]
+  avatar:                   # articulated worker, ~1.45 units (~1.7 m) tall; heights above floor
+    hip_h: 0.72
+    hip_dx: 0.08
+    leg: [0.11, 0.70, 0.13]       # box dims x, length, z
+    torso: [0.32, 0.50, 0.18]
+    torso_h: 0.98                 # torso centre
+    shoulder_h: 1.20
+    shoulder_dx: 0.21
+    arm: [0.08, 0.52, 0.09]
+    head_h: 1.34
+    head_r: 0.09
+    stride: 0.9                   # distance per full walk cycle (units)
+    leg_swing: 0.45               # rad
+    arm_swing: 0.35               # rad
+    bob: 0.025
+    ring_color: [30, 144, 255]
+    colors:
+      vest: [255, 120, 0]         # hi-vis orange
+      trousers: [35, 45, 80]
+      boots: [30, 30, 30]
+      skin: [225, 180, 140]
+      helmet: [255, 210, 0]
+  colors:                   # faint frames by condition
+    healthy: [150, 150, 150]
+    watch: [230, 180, 40]
+    degraded: [240, 120, 30]
+    attention_required: [220, 30, 30]
+    no_record: [205, 205, 215]
+  highlight_colors:         # bright frames near the avatar
+    healthy: [60, 220, 90]
+    watch: [255, 200, 0]
+    degraded: [255, 120, 0]
+    attention_required: [255, 0, 0]
+    no_record: [0, 220, 255]
+
+evidence:
+  samples_per_day: 48           # 30-min telemetry
+  metrics: [process_pressure_bar, process_flow_pct, position_setpoint_pct, position_actual_pct,
+            pneumatic_supply_bar, stiction_index, load_for_opening_pct, vibration_mm_s,
+            bearing_temp_c, motor_current_a, speed_rpm, signal_quality_pct, sensor_bias]
+  n_issue_events: 10            # most recent events with the asset's issue code
+  n_other_events: 5             # most recent other high-severity events
+  important_severities: [high, critical]
+  n_work_orders: 5
+  n_cases: 3
+  always_docs: [DOC-RAG-GUIDE, DOC-FIELD-SAFETY, DOC-3D-MAPPING]
+  dq_penalty: {low: 0.02, medium: 0.05, high: 0.1}   # per Data_Quality issue (Builder Q-06)
+  dq_penalty_max: 0.3
+
+copilot:
+  # tried in order; on quota (429) / overload (503) / retired (404) the next one is used
+  models: [gemini-3.8-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-2.5-flash]
+  dead_model_skip_s: 600        # skip a quota-exhausted/retired model for this long
+  temperature: 0.2
+  expected_latency_s: 22        # drives the viewer's progress bar
+  api_key_env: GEMINI_API_KEY
