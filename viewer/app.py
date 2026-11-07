@@ -255,6 +255,18 @@ def selection_text(n: dict, u2m: float) -> str:
 
 # ---------- viewer ----------
 
+def start_facing(cfg: Cfg, door: np.ndarray) -> np.ndarray:
+    """Initial worker direction at the door (x, 0, z): straight into the room, away from the door wall,
+    unless viewer.start_facing gives [dx, dz]."""
+    v = cfg["viewer"].get("start_facing", "auto")
+    if isinstance(v, (list, tuple)):
+        d = np.array([float(v[0]), 0.0, float(v[1])])
+    else:
+        wall_z = float(cfg["scene"].get("back_wall_z", door[2] - 1.0))
+        d = np.array([0.0, 0.0, 1.0 if door[2] >= wall_z else -1.0])
+    return d / (np.linalg.norm(d) + 1e-9)
+
+
 class Sim:
     def __init__(self, cfg: Cfg) -> None:
         self.cfg, self.vc = cfg, cfg["viewer"]
@@ -263,6 +275,8 @@ class Sim:
         self.pts = np.array(path["points"], np.float64)
         seg = np.linalg.norm(np.diff(self.pts, axis=0), axis=1)
         self.s = np.concatenate([[0], np.cumsum(seg)])
+        self.door_p = self.pts[0].copy()                # the worker starts (and resets) here
+        self.start_dir = start_facing(cfg, self.door_p)
         # distance along the walk at which each tour stop is reached (pauses happen there)
         self.stops = self.tour["stops"] if self.tour else []
         self.stop_s = [float(self.s[min(st["sample_index"], len(self.s) - 1)]) for st in self.stops]
@@ -312,6 +326,8 @@ class Sim:
         self.av = scaled_avatar(self.vc["avatar"])
         self._build_scene()
         self._build_gui()
+        if self.cb_pov.value:                           # open in the worker's view at the door
+            self.set_pov(True)
         self.h_corr: list[Any] = []                  # boundary-correction preview layers (api/annotate.py)
         self.h_corr_acc: list[Any] = []
         self.annot: Any = None
@@ -547,6 +563,8 @@ class Sim:
         av = self.av
         if self.face_target is not None and not moving:                 # face equipment only while standing
             tangent = self.face_target - p
+        elif not moving and not self.arrived and np.linalg.norm(p - self.door_p) < 1e-3:
+            tangent = self.start_dir                                    # at the door: face into the room
         elif self.arrived:                                              # face the target
             tangent = np.array(self.target["center"]) - p
         else:
@@ -658,7 +676,7 @@ class Sim:
         """Three ways to move the worker; every control explains itself in a hover tooltip."""
         g.add_markdown("**There are three options to move the worker. Choose one of them.**  \n"
                        "Hover **ⓘ** for a short explanation.")
-        self.cb_walk_pov = g.add_checkbox("Use POV", False,
+        self.cb_walk_pov = g.add_checkbox("Use POV", bool(self.vc["pov"].get("on_start", False)),
                                           hint="See the walk through the worker's eyes. Switch off to get your own "
                                                "camera back.")
         self.md_walk = g.add_markdown("")                           # walking to / arrived at (all modes)
@@ -913,7 +931,7 @@ class Sim:
         g.add_markdown(f"**{c['objects']} objects** extracted · {c['structures']} structural planes · "
                        f"**{c['mapped']} mapped** to Excel")
         with g.add_folder("View"):
-            self.cb_pov = g.add_checkbox("Worker view (POV)", False,
+            self.cb_pov = g.add_checkbox("Worker view (POV)", bool(self.vc["pov"].get("on_start", False)),
                                          hint="See the room through the worker's eyes; turns with the worker. "
                                               "Switch off to get your own camera back.")
             self.sl_size = g.add_slider("Worker size", 0.5, 1.2, 0.05,
@@ -1424,10 +1442,21 @@ class Sim:
             return
         for c in clients:
             saved = self._saved_cams.get(c.client_id)
-            if saved:
-                with c.atomic():
+            with c.atomic():
+                if saved:
                     c.camera.position, c.camera.look_at, c.camera.fov = saved
+                else:                                   # joined while in POV: overview from above the door
+                    self.overview_camera(c)
         self._saved_cams = {}
+
+    def overview_camera(self, c: Any) -> None:
+        pc = self.vc["pov"]
+        up = np.array([0.0, -1.0, 0.0])                                 # scene up = -y
+        p = self.position()
+        f = getattr(self, "_facing", self.start_dir)
+        c.camera.up_direction = tuple(up)
+        c.camera.position = tuple(p + up * pc.get("overview_height", 1.6) - f * pc.get("overview_back", 0.3))
+        c.camera.look_at = tuple(p + f * 3.0)
 
     def update_pov(self) -> None:
         """Camera at the worker's eyes, looking where the worker walks; at a stop or the target it looks
@@ -1457,6 +1486,11 @@ class Sim:
         look = look if prev is None else prev + pc["smoothing"] * (look - prev)
         self._pov_look = look
         fov = float(np.radians(pc["fov_deg"]))
+        if not getattr(self, "_initial_cam_set", False):
+            # new browsers open in the worker's view at the door; viser's "Reset View" returns here too
+            ic = self.server.initial_camera
+            ic.up, ic.fov, ic.position, ic.look_at = tuple(up), fov, tuple(eye), tuple(look)
+            self._initial_cam_set = True
         for c in self.server.get_clients().values():
             with c.atomic():
                 c.camera.up_direction = tuple(up)
