@@ -53,6 +53,9 @@ class TrainTab:
         h = getattr(sim, "h_target_label", None)
         if h is not None:
             h.visible = not on
+        for dd in (getattr(sim, "dd_walk", None), getattr(sim, "dd_equip", None)):   # status dots + urgency order
+            if dd is not None:
+                dd.visible = not on
         if sim.visit_active is not None:                       # redraw the stop outline / tint / label
             sim.highlight_stop(sim.visit_active)
 
