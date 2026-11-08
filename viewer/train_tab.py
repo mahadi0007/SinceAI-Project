@@ -66,10 +66,10 @@ class TrainTab:
         self.sim.cb_health.value = False
 
     def leave(self) -> None:
-        self.set_hidden(False)
-        if self._saved is not None:
+        if self._saved is not None:                            # the user's settings first, then the quiz cues
             self.sim.dd_labels.value, self.sim.cb_health.value = self._saved
             self._saved = None
+        self.set_hidden(False)
 
     # --- flow ---
     def start(self) -> None:

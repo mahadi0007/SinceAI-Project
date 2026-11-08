@@ -160,6 +160,21 @@ def test_train_tab_error_restores_viewer():
 
 
 @need
+def test_train_tab_restores_settings_when_hiding_fails():
+    from types import SimpleNamespace
+    from viewer.train_tab import TrainTab
+    sim = SimpleNamespace(cfg=CFG, dd_labels=_W(value="Needs attention"), cb_health=_W(value=True),
+                          visit_active=None, quiz_hidden=False, h_target_label=_W())
+    sim.find_node = lambda tag: {"tag": tag}
+    sim.go_to = lambda n: None
+    tab = TrainTab(sim, _G())
+    tab.set_hidden = lambda on: 1 / 0
+    tab.b_start.click()
+    assert "Training error" in tab.md_reveal.content and not sim.quiz_hidden
+    assert sim.dd_labels.value == "Needs attention" and sim.cb_health.value is True
+
+
+@need
 def test_answer_counts_once_and_rejects_finished_session():
     s = Session({**CFG, "training": {**CFG["training"], "session_size": 1}})
     sc = s.current()
