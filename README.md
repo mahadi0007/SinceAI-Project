@@ -64,7 +64,8 @@ use another folder). All tuning values are in `config.yaml`.
 |---|---|
 | **Scene** | Replay the extraction, colour boxes by Excel health, show the occupancy grid, switch Scan / BIM / Overlay |
 | **Walk** | Walk to an equipment, pick any object in the scan to walk to, or play the inspection tour (POV switch) |
-| **Info** | The clicked object and the selected equipment: Excel data with sheet/row sources, spoken summary, cited diagnosis |
+| **Info** | The clicked object and the selected equipment: Excel data with sheet/row sources, spoken summary, cited diagnosis, **Pre-inspection brief** button |
+| **Train** | Scenario quiz: walk to an asset, read its evidence with the answer hidden, answer *What's wrong?* and *Next safe step?*, then see the reveal and score |
 | **Edit** | Move, remove or duplicate objects, then **Apply layout** to re-plan routes (needs `python -m viewer.removable`) |
 | **Ask** | Chat: quick commands (`take me to M-006`, `start tour`) or questions answered by Claude through the MCP tools |
 
@@ -77,6 +78,7 @@ use another folder). All tuning values are in `config.yaml`.
 | BIM model (IFC4) | `python -m pipeline.export_ifc`, then Display: BIM in the viewer |
 | Rigged worker avatar | Mixamo download, see [docs/DETAILS.md](docs/DETAILS.md#worker-avatar-optional-mixamo); otherwise a simple figure is used |
 | MCP server for Claude | `.mcp.json` registers `mcp_server.py`; on macOS/Linux set `VALMET_PYTHON=.venv/bin/python` |
+| Pre-inspection brief | `VALMET_OFFLINE=1 python -m copilot.brief P-002` (or `--all`), written to `out/briefs/`; see [docs/DETAILS.md](docs/DETAILS.md#pre-inspection-brief) |
 | Boundary repair and manual correction | See [docs/DETAILS.md](docs/DETAILS.md) |
 
 ## Tests

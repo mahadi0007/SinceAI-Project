@@ -193,3 +193,9 @@ def test_tint_survives_filter_rebuild_and_does_not_tint_copies(sim):
     np.testing.assert_array_equal(sim.h_splat['room'].rgbs[1], original[2])
     sim._set_visit_tint(None)
     np.testing.assert_array_equal(sim.inst['A']['h'].rgbs, original[:2])
+
+
+def test_neutral_visit_style_hides_status():
+    col, title = visit_style(node('A', 'attention_required'), neutral=True)
+    assert title == 'P-A · ?' and 'ATTENTION' not in title
+    assert visit_style(node('A', 'attention_required'))[1] == 'P-A · ATTENTION REQUIRED'

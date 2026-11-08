@@ -115,6 +115,14 @@ def diagnose(key: str, question: str | None = None, allow_paid: bool = False) ->
 
 
 @mcp.tool()
+def pre_inspection_brief(key: str) -> dict[str, Any]:
+    """Write a printable pre-inspection brief for one asset (route from the door, equipment needing attention
+    along the way, cached/template diagnosis with evidence IDs, what to verify, safety, standard checklist,
+    draft work order). Files: out/briefs/<tag>.md / .html / _route.png. No LLM, no cost."""
+    return T.pre_inspection_brief(key)
+
+
+@mcp.tool()
 def budget_status() -> dict[str, Any]:
     """Paid LLM requests used so far versus the team's hard cap."""
     return T.budget_status()
