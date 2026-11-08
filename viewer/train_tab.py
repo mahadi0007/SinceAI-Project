@@ -44,7 +44,10 @@ class TrainTab:
             fn()
         except Exception as e:  # noqa: BLE001 - the quiz must never break the viewer
             self.md_reveal.content = f"⚠️ _Training error: {type(e).__name__}: {e}_"
-            self.set_hidden(False)
+            try:                                                # give the rest of the viewer its normal state back
+                self.leave()
+            except Exception:  # noqa: BLE001
+                self.sim.quiz_hidden = False
 
     # --- 3D: hide every status cue while a question is open ---
     def set_hidden(self, on: bool) -> None:
@@ -53,9 +56,6 @@ class TrainTab:
         h = getattr(sim, "h_target_label", None)
         if h is not None:
             h.visible = not on
-        for dd in (getattr(sim, "dd_walk", None), getattr(sim, "dd_equip", None)):   # status dots + urgency order
-            if dd is not None:
-                dd.visible = not on
         if sim.visit_active is not None:                       # redraw the stop outline / tint / label
             sim.highlight_stop(sim.visit_active)
 
@@ -84,6 +84,7 @@ class TrainTab:
         sc = self.session.current()
         if sc is None:
             return self.finish()
+        self.enter()
         self.set_hidden(True)
         n = self.session.i + 1
         self.md_head.content = f"### Scenario {n}/{len(self.session.tags)}: {sc['tag']}"

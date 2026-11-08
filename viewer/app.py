@@ -1698,7 +1698,7 @@ class Sim:
         what = (f"<b>{ui.esc(n['asset']['tag'])}</b> · {ui.esc(n['label'])}" if n["asset"] else
                 f"<b>{ui.esc(n['id'])}</b> · {ui.esc(n['label'])} <em>(no Excel record)</em>")
         self.h_clicked.content = ui.selected_chip(what)
-        if n["asset"] and not self.quiz_hidden:                      # clicked equipment -> Info tab (not in a quiz)
+        if n["asset"]:                                               # clicked equipment -> Info tab
             self.choose_equipment(n["asset"]["tag"])
 
     # --- open in 3D: the object alone on a distant stage; the browser that opened it orbits / zooms around it ---

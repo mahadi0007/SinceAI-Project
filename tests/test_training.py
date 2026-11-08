@@ -125,7 +125,7 @@ def test_train_tab_runs_all_scenarios_and_restores_scene():
     walked, hidden_on_walk = [], []
     sim = SimpleNamespace(cfg={**CFG, "training": {**CFG["training"], "session_size": None}},
                           dd_labels=_W(value="Needs attention"), cb_health=_W(value=True), visit_active=None,
-                          quiz_hidden=False, h_target_label=_W(), dd_walk=_W(), dd_equip=_W())
+                          quiz_hidden=False, h_target_label=_W())
     sim.find_node = lambda tag: {"tag": tag}
     sim.go_to = lambda n: (walked.append(n["tag"]), hidden_on_walk.append(sim.quiz_hidden))
     tab = TrainTab(sim, _G())
@@ -135,15 +135,28 @@ def test_train_tab_runs_all_scenarios_and_restores_scene():
     for _ in range(n):
         sc = tab.session.current()
         assert sim.quiz_hidden and sc["q1"]["answer"] not in tab.md_evidence.content
-        assert not sim.dd_walk.visible and not sim.dd_equip.visible
         tab.dd_q1.value, tab.dd_q2.value = sc["q1"]["answer"], sc["q2"]["answer"]
         tab.b_submit.click()
         assert not sim.quiz_hidden and "Answer:" in tab.md_reveal.content
-        assert sim.dd_walk.visible and sim.dd_equip.visible
         tab.b_next.click()
     assert walked == tab.session.tags and all(hidden_on_walk)
     assert tab.md_head.content == "### Session complete" and f"{n}/{n} fully correct" in tab.md_score.content
     assert sim.dd_labels.value == "Needs attention" and sim.cb_health.value is True and sim.h_target_label.visible
+
+
+@need
+def test_train_tab_error_restores_viewer():
+    from types import SimpleNamespace
+    from viewer.train_tab import TrainTab
+    sim = SimpleNamespace(cfg=CFG, dd_labels=_W(value="Needs attention"), cb_health=_W(value=True),
+                          visit_active=None, quiz_hidden=False, h_target_label=_W())
+    sim.find_node = lambda tag: {"tag": tag}
+    sim.go_to = lambda n: 1 / 0
+    tab = TrainTab(sim, _G())
+    tab.b_start.click()
+    assert "Training error" in tab.md_reveal.content and not sim.quiz_hidden
+    assert sim.dd_labels.value == "Needs attention" and sim.cb_health.value is True
+    assert sim.h_target_label.visible
 
 
 @need
