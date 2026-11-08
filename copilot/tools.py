@@ -258,6 +258,19 @@ def diagnose(key: str, question: str | None = None, allow_paid: bool = False) ->
             "unknown_ids_removed": cc["unknown_ids_removed"], "markdown": to_markdown(d)}
 
 
+def pre_inspection_brief(key: str) -> dict:
+    """Pre-inspection brief (route, nearby attention assets, diagnosis, safety, checklist, draft work order)
+    written to out/briefs/<tag>.md|.html|_route.png. No LLM, no cost."""
+    n = resolve(key)
+    if n is None or not n.get("asset"):
+        return {"ok": False, "message": f"'{key}' is not an asset with Excel data."}
+    try:
+        from copilot.brief import write_brief
+        return write_brief(n["asset"]["tag"], cfg())
+    except Exception as e:  # noqa: BLE001 - tools never raise
+        return {"ok": False, "message": f"Brief failed: {type(e).__name__}: {e}"}
+
+
 def budget_status() -> dict:
     """Paid LLM requests used vs the team's hard cap (ledger)."""
     from copilot.llm import usage_summary

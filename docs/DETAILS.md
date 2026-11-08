@@ -104,7 +104,7 @@ Accept (single-view needs the explicit "provisional" tick) -> Apply -> Undo if n
 
 `mcp_server.py` exposes the field-service data and actions as MCP tools (thin wrapper over `copilot/tools.py`):
 `search_assets`, `find_objects` (the ~900 detected scan objects by vision label), `get_asset`, `telemetry_trend`, `recent_events`, `maintenance_history`, `nearby`, `route_to`,
-`plan_tour`, `draft_work_order`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
+`plan_tour`, `draft_work_order`, `pre_inspection_brief`, `diagnose`, `budget_status`, and viewer control `show_in_viewer`,
 `walk_in_viewer`, `tour_in_viewer` (the running viewer polls `out/viewer_cmd.jsonl`). Prompts: `shift_handover`, `investigate`.
 
 - **Claude Code:** `.mcp.json` registers the server as `valmet-copilot`; open Claude Code in this folder and approve it.
@@ -133,3 +133,28 @@ The chat panel shows the Claude status when the viewer starts:
   then restart the viewer. If it is installed in an unusual place, set `chat.claude_path` in `config.yaml`.
 
 Claude never spends the team's paid Featherless budget unless you explicitly ask for a fresh paid diagnosis.
+
+## Training mode (viewer "Train" tab)
+
+A scenario quiz for training technicians. The worker walks to a real asset, the tab shows its evidence with
+the answer removed (no issue code, status, health, next check or matching past cases; alarm codes are masked
+for every asset), and the trainee answers *What's wrong?* and *Next safe step?* (one option is deliberately
+unsafe). The reveal shows the answer, the cached/template diagnosis with evidence IDs and confidence, the most
+similar past case and the DOC-FIELD-SAFETY note. While a question is open the 3D scene hides status labels,
+health colours and tints. Score and summary stay in memory. Settings: `training:` in `config.yaml` (order,
+seed, session size, healthy assets, unsafe options). Logic: `copilot/training.py`; UI: `viewer/train_tab.py`.
+No AI requests.
+
+## Pre-inspection brief
+
+One printable brief per asset for the technician to read before going on site: header, route from the door
+(metres + top-down PNG), equipment needing attention along the way, diagnosis (cached AI answer or template,
+labelled), what to verify, safety and data-quality flags, a standard checklist (`brief.checklist` in
+`config.yaml`, not AI), the draft work order and an evidence appendix. No AI requests.
+
+```bash
+VALMET_OFFLINE=1 python -m copilot.brief P-002   # -> out/briefs/P-002.md, P-002.html, P-002_route.png
+python -m copilot.brief --all                     # every mapped asset that is not healthy
+```
+
+Also: the "Pre-inspection brief" button in the viewer's Info tab, and the MCP tool `pre_inspection_brief`.

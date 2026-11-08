@@ -458,3 +458,35 @@ ifc:
   fittings_as_flanges: false    # true = catalog flange on the nearest pipe (~10 cm off the scan); false = scan mesh
   flange_snap_m: 0.25           # fitting within this of a pipe axis becomes a flange on that pipe
   floor_snap_m: 0.5             # pumps/motors whose bottom is this close above the floor are stood on it
+
+training:                   # Train tab: scenario quiz (copilot/training.py); no LLM calls, scores in memory
+  order: random             # random | fixed (most urgent first)
+  seed: null                # int = repeatable sessions (order, distractors)
+  session_size: 6           # scenarios per session; null = whole pool
+  n_healthy: 2              # healthy assets added to the non-healthy pool ("No issue" is a valid answer)
+  unsafe_distractor: true   # Q2 gets one clearly unsafe option (teaches DOC-FIELD-SAFETY)
+  unsafe_steps:
+    - Open the casing to look inside without lockout-tagout
+    - Restart the equipment to see if the problem clears, skipping the permit
+    - Remove the guard while it runs to listen more closely
+
+brief:                      # pre-inspection brief (copilot/brief.py) -> out/briefs/
+  route_radius_m: 1.0       # assets this close to the walking route count as "along the way"
+  nearby_radius_m: 1.5      # ... or this close to the target (tools.nearby)
+  checklist:                # standard checklist (static, not AI): ASSET_CLASS and ASSET_CLASS:ISSUE_CODE
+    ALL: [site permit and LOTO kit, "PPE: helmet, hi-vis, gloves, safety glasses, hearing protection", torch, tablet with this brief]
+    PROCESS_PUMP: [handheld vibration meter, mechanic's stethoscope, infrared thermometer]
+    PROCESS_PUMP:CAVITATION_RISK: [suction and discharge pressure gauges, process data for the last 24 h]
+    PROCESS_PUMP:FOULING: [differential pressure gauge, flow reading from the control room]
+    PROCESS_PUMP:SEAL_DEGRADATION: [leak detection paper or absorbent pads, inspection mirror]
+    PROCESS_PUMP:MISALIGNMENT: [laser alignment tool or dial indicators, feeler gauges]
+    ELECTRIC_MOTOR: [clamp meter, infrared thermometer, handheld vibration meter]
+    ELECTRIC_MOTOR:OVERHEATING: [thermal camera, airflow check (anemometer), load data from the control room]
+    ELECTRIC_MOTOR:CURRENT_IMBALANCE: [three-phase power analyser, insulation tester (qualified electrician only)]
+    ELECTRIC_MOTOR:MISALIGNMENT: [laser alignment tool or dial indicators]
+    CONTROL_VALVE: [positioner handheld / HART communicator, pneumatic supply pressure gauge]
+    CONTROL_VALVE:POSITION_DEVIATION: [valve signature / step-test tool, setpoint and position trend]
+    CONTROL_VALVE:CALIBRATION_DRIFT: [calibrated reference signal source]
+    PRESSURE_TRANSMITTER: [calibrated reference pressure gauge, HART communicator]
+    VIBRATION_SENSOR: [reference vibration meter, torque wrench for the mount, contact cleaner]
+    VIBRATION_SENSOR:MOUNTING_ISSUE: [spare mounting stud and adhesive pad per site standard]

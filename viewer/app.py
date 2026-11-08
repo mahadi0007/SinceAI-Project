@@ -101,11 +101,14 @@ def status_of(node: dict) -> str:
     return node["asset"]["condition_state"] if node["asset"] else "no_record"
 
 
-def visit_style(node: dict) -> tuple[tuple[int, int, int], str]:
-    """Vivid binary health colors; unknown equipment stays neutral."""
+def visit_style(node: dict, neutral: bool = False) -> tuple[tuple[int, int, int], str]:
+    """Vivid binary health colors; unknown equipment stays neutral. neutral=True (training quiz before
+    the answer is revealed): no status at all."""
     asset = node.get("asset") or {}
     state = str(asset.get("condition_state", "")).strip().lower()
     name = asset.get("tag") or node["id"]
+    if neutral:
+        return (0, 200, 255), f"{name} · ?"
     if state == "healthy":
         return (0, 255, 40), f"{name} · HEALTHY"
     if state and state not in ("no_record", "unknown", "unassigned"):
@@ -255,6 +258,8 @@ def start_facing(cfg: Cfg, door: np.ndarray) -> np.ndarray:
 
 
 class Sim:
+    quiz_hidden = False          # Train tab: a scenario is open and its answer not revealed (hide status in 3D)
+
     def __init__(self, cfg: Cfg) -> None:
         self.cfg, self.vc = cfg, cfg["viewer"]
         self.sg, path, self.tour = load_scene(cfg)
@@ -474,6 +479,10 @@ class Sim:
         color, _ = visit_style(n)
         return (185, 255, 200) if color[1] > color[0] else ((255, 190, 190) if color[0] > color[1] else (215, 220, 225))
 
+    def visit_pale(self, n: dict) -> tuple[int, int, int]:
+        """pale_of, but neutral grey while a training quiz hides the answer."""
+        return (215, 220, 225) if self.quiz_hidden else self.pale_of(n)
+
     def lookup(self, oid: str | None) -> dict | None:
         """Scene object by id, or the identity-free node of a copy instance."""
         if oid is None:
@@ -494,7 +503,7 @@ class Sim:
         target = None
         label = -2
         if n is not None:
-            target = np.array(self.pale_of(n), dtype=np.float32) / 255.0
+            target = np.array(self.visit_pale(n), dtype=np.float32) / 255.0
             if not hasattr(self, "_splat_object_labels"):
                 distance, nearest = cKDTree(self.pick_xyz).query(self.sp["xyz"])
                 cutoff = float(self.cfg["label"]["member_dist"])
@@ -542,7 +551,7 @@ class Sim:
         h = self._bim_handle(n["id"])
         if h is not None:
             base = np.array(self._bim_color(n["id"]), float)
-            h.color = tuple(int(v) for v in np.round((1 - amount) * base + amount * np.array(self.pale_of(n))))
+            h.color = tuple(int(v) for v in np.round((1 - amount) * base + amount * np.array(self.visit_pale(n))))
             self._bim_tinted = n["id"]
 
     # --- scene ---
@@ -572,7 +581,7 @@ class Sim:
         self.h_tour_markers: list[Any] = []
         self.draw_tour_markers()
         t = self.target
-        sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
+        self.h_target_label = sc.add_label("/target_label", f"TARGET {t['asset']['tag']} · {t['asset']['issue_code']}",
                      position=(t["center"][0], t["bbox_min"][1] - 0.1, t["center"][2]),
                      anchor="bottom-center")
         self.h_highlight = sc.add_line_segments("/highlight", *edges_for([], self.vc["colors"]),
@@ -715,6 +724,12 @@ class Sim:
             self._build_walk_tab(g)
         with tabs.add_tab("Info", icon="info-circle"):
             self._build_equipment_tab(g)
+        with tabs.add_tab("Train", icon="school"):
+            try:                                           # optional extra: never blocks the viewer
+                from viewer.train_tab import TrainTab
+                self.train = TrainTab(self, g)
+            except Exception as e:  # noqa: BLE001
+                g.add_markdown(f"⚠️ _Training mode unavailable: {type(e).__name__}: {e}_")
         if self.movable:
             with tabs.add_tab("Edit", icon="arrows-move"):
                 self._build_edit_tab(g)
@@ -758,6 +773,11 @@ class Sim:
         b_open_info = g.add_button("Open in 3D", icon="cube",
                                    hint="Show this object alone: drag to turn it, scroll to zoom.")
         self.b_open3d += [b_open_sel, b_open_info]
+        try:                                               # optional extra: never blocks the Info tab
+            from viewer.train_tab import add_brief_button
+            add_brief_button(self, g)
+        except Exception as e:  # noqa: BLE001
+            print(f"[viewer] pre-inspection brief unavailable: {type(e).__name__}: {e}")
         self.md_loading = g.add_markdown("", visible=False)
         self.pb = g.add_progress_bar(0.0, animated=True, visible=False, color="teal")
         self.md_copilot = g.add_markdown("")
@@ -1494,7 +1514,7 @@ class Sim:
         """While walking: nearby Excel assets light up in their health colour."""
         moving = self.playing and self.dist < self.s[-1]
         active = self.visit_active["object_id"] if self.visit_active else None
-        lit = [n for n in mapped if n["id"] != active] if moving else []
+        lit = [n for n in mapped if n["id"] != active] if moving and not self.quiz_hidden else []
         ids = tuple(n["id"] for n in lit)
         if ids != getattr(self, "_lit_ids", ()):
             self._lit_ids = ids
@@ -2532,6 +2552,9 @@ class Sim:
         st = self.stops[k]
         self.next_stop = k + 1
         self.highlight_stop(st)
+        if st["kind"] == "goto" and self.quiz_hidden:
+            self.md_walk.content = f"✅ **Arrived at {st['tag']}**  \nAnswer the questions in the **Train** tab."
+            return
         if st["kind"] == "goto":                # single destination: status + offer the copilot (button)
             self.md_walk.content = (f"✅ **Arrived at {stop_title(st)}**" + (
                 "  \nIts data is in the **Info** tab." if st["has_asset"]
@@ -2814,7 +2837,7 @@ class Sim:
         self.set_route(plan["points"], [goto_record(node, len(plan["points"]) - 1)])
         dest = node["asset"]["tag"] if node.get("asset") else f"{node['id']} ({node['label']})"
         note = "" if node.get("asset") else "  \n_No asset record: this object is not in the Excel pack._"
-        if node.get("asset"):
+        if node.get("asset") and not self.quiz_hidden:     # the Info tab would show the quiz answer
             self.choose_equipment(node["asset"]["tag"])
         self.md_walk.content = (f"🚶 Walking to **{dest}**: "
                                 f"{plan['length'] * self.cfg['scene']['units_to_m']:.1f} m, "
@@ -2825,7 +2848,7 @@ class Sim:
         """Solid health outline and a pale tint applied directly to the actual equipment."""
         n = self.lookup(st["object_id"])
         self.clear_visit_highlight()
-        _, title = visit_style(n)
+        _, title = visit_style(n, neutral=self.quiz_hidden)
         lo, hi = self._draw_stop_box(n)
         self.h_stop_label = self.server.scene.add_label(
             "/stop/label", title,
@@ -2842,7 +2865,7 @@ class Sim:
 
     def _draw_stop_box(self, n: dict) -> tuple[np.ndarray, np.ndarray]:
         """Strong red/green outline around the object where it is shown now (follows a moved object)."""
-        col, title = visit_style(n)
+        col, title = visit_style(n, neutral=self.quiz_hidden)
         lo, hi = self.live_bounds(n) if n["id"] in getattr(self, "inst", {}) else             (np.array(n["bbox_min"]), np.array(n["bbox_max"]))
         pad = self.vc.get("stop_outline_pad", .01)
         segs = box_edges(lo - pad, hi + pad)
